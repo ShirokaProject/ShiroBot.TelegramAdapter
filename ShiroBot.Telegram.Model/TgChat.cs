@@ -28,6 +28,10 @@ public sealed record TgChat
 
     [JsonIgnore]
     public bool IsPrivate => Type == "private";
+
+    /// <summary>未显式建模的平台字段，原样保留。</summary>
+    [JsonExtensionData]
+    public Dictionary<string, System.Text.Json.JsonElement>? AdditionalData { get; init; }
 }
 
 /// <summary>Telegram Bot API `ChatMember`(简化,涵盖各 status 的公共字段)。</summary>
@@ -44,4 +48,8 @@ public sealed record TgChatMember
 
     [JsonPropertyName("until_date")]
     public long? UntilDate { get; init; }
+
+    /// <summary>未显式建模的平台字段，原样保留。</summary>
+    [JsonExtensionData]
+    public Dictionary<string, System.Text.Json.JsonElement>? AdditionalData { get; init; }
 }

@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="ShiroBot.TelegramAdapter.csproj" />
+  <Project Path="TestPlugin/ShiroBot.TelegramAdapter.TestPlugin.csproj" />
+  <Project Path="ShiroBot.Telegram.Model/ShiroBot.Telegram.Model.csproj" />
+</Solution>

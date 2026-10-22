@@ -6,14 +6,19 @@ using Sdk = ShiroBot.SDK.Models;
 namespace ShiroBot.TelegramAdapter;
 
 /// <summary>Telegram Bot API 模型 ↔ ShiroBot 核心模型映射。</summary>
-public static class TelegramMapper
+public sealed class TelegramMapper
 {
     public const string PlatformId = "telegram";
 
-    /// <summary>由适配器在启动时填充,用于把 file_id 解析为下载 URL。</summary>
-    internal static TelegramClient? Client { get; set; }
-
-    internal static string? SelfId { get; set; }
+    internal string? SelfId { get; set; }
+    internal BoundedCache<TgUser> Users { get; } = new();
+    internal BoundedCache<TgChat> Chats { get; } = new();
+    internal BoundedCache<(string ChannelId, string FileId)> Uploads { get; } = new();
+    public static ShiroBot.Model.Telegram.TelegramUser ToPlatformUser(TgUser user) => new()
+    {
+        UserId = user.Id, FirstName = user.FirstName, LastName = user.LastName,
+        Username = user.Username, IsBot = user.IsBot
+    };
 
     // ─── Channel / User / Member ───
 
@@ -51,19 +56,21 @@ public static class TelegramMapper
 
     // ─── 入站消息 ───
 
-    public static MessageEvent ToMessageEvent(TgMessage message) => new()
+    public MessageEvent ToMessageEvent(TgMessage message)
     {
-        Platform = PlatformId,
-        SelfId = SelfId,
-        Raw = message,
-        MessageId = message.MessageId.ToString(),
-        Channel = ToChannel(message.Chat, message.MessageThreadId),
-        Sender = message.From is null
-            ? new Sdk.User(message.Chat.Id.ToString()) { Name = message.Chat.Title }
-            : ToUser(message.From),
-        Segments = ToSegments(message),
-        Timestamp = DateTimeOffset.FromUnixTimeSeconds(message.Date)
-    };
+        Chats.Set(message.Chat.Id.ToString(), message.Chat);
+        if (message.From is { } from) Users.Set(from.Id.ToString(), from);
+        return new MessageEvent
+        {
+            Platform = PlatformId, SelfId = SelfId, Raw = message,
+            MessageId = message.MessageId.ToString(), Channel = ToChannel(message.Chat, message.MessageThreadId),
+            Sender = message.SenderChat is { } senderChat
+                ? new Sdk.User(senderChat.Id.ToString()) { Name = senderChat.Title ?? senderChat.Username }
+                : message.From is { } user ? ToUser(user)
+                    : new Sdk.User(message.Chat.Id.ToString()) { Name = message.Chat.Title },
+            Segments = ToSegments(message), Timestamp = DateTimeOffset.FromUnixTimeSeconds(message.Date)
+        };
+    }
 
     public static IReadOnlyList<MessageSegment> ToSegments(TgMessage message)
     {
@@ -130,11 +137,20 @@ public static class TelegramMapper
             });
         }
 
+        if (message.Animation is { } animation)
+            segments.Add(new Sdk.FileSegment(ResolveFileUrl(animation.FileId))
+                { ResourceId = animation.FileId, FileName = animation.FileName, FileSize = animation.FileSize });
+        if (message.VideoNote is { } note)
+            segments.Add(new VideoSegment(ResolveFileUrl(note.FileId)) { ResourceId = note.FileId });
+
         if (message.Sticker is { } sticker)
         {
-            segments.Add(new EmojiSegment(sticker.FileId) { Name = sticker.Emoji });
+            segments.Add(new EmojiSegment("tgfile://" + sticker.FileId) { Name = sticker.Emoji });
         }
 
+        if (message.AdditionalData is { } unknown)
+            foreach (var (kind, value) in unknown)
+                segments.Add(new RawSegment(PlatformId, kind, value.Clone()));
         return segments;
     }
 
@@ -178,45 +194,49 @@ public static class TelegramMapper
 
     // ─── 出站 ───
 
-    /// <summary>把段序列渲染为发送计划:文本(带 @ 降级)+ 各媒体附件 + reply id。</summary>
     public static OutgoingPlan ToOutgoingPlan(IReadOnlyList<MessageSegment> segments)
     {
+        var markdown = segments.Any(s => s is MarkdownSegment || s is MentionSegment m && long.TryParse(m.UserId, out _));
         var text = new StringBuilder();
         string? replyTo = null;
+        string? sticker = null;
         var attachments = new List<ResourceSegment>();
-
+        string Plain(string value) => markdown ? EscapeMarkdown(value) : value;
         foreach (var segment in segments)
         {
             switch (segment)
             {
-                case TextSegment t:
-                    text.Append(t.Text);
+                case TextSegment t: text.Append(Plain(t.Text)); break;
+                case MarkdownSegment m: text.Append(m.Content); break;
+                case MentionSegment mention when long.TryParse(mention.UserId, out var userId):
+                    text.Append('[').Append(EscapeMarkdown(mention.DisplayName ?? mention.UserId))
+                        .Append("](tg://user?id=").Append(userId).Append(')');
                     break;
                 case MentionSegment mention:
-                    // Telegram 无法在纯文本里 @ 数字 id,降级为 @username 或显示名
-                    text.Append('@').Append(mention.DisplayName?.TrimStart('@') ?? mention.UserId);
-                    break;
-                case MentionAllSegment:
-                    text.Append("@all");
-                    break;
-                case QuoteSegment quote:
-                    replyTo = quote.MessageId;
-                    break;
+                    text.Append(Plain("@" + mention.UserId.TrimStart('@'))); break;
+                case QuoteSegment quote: replyTo = quote.MessageId; break;
+                case EmojiSegment emoji when emoji.Id.StartsWith("tgfile://", StringComparison.Ordinal):
+                    if (sticker is not null) throw new NotSupportedException("每条消息只能发送一个贴纸。");
+                    sticker = emoji.Id[9..]; break;
+                case EmojiSegment emoji when !string.IsNullOrEmpty(emoji.Name): text.Append(Plain(emoji.Name)); break;
+                case EmojiSegment emoji when emoji.Id.Any(c => c > 127): text.Append(Plain(emoji.Id)); break;
                 case EmojiSegment emoji:
-                    text.Append(emoji.Name ?? string.Empty);
-                    break;
-                case ResourceSegment resource:
-                    attachments.Add(resource);
-                    break;
-                case RawSegment raw:
-                    throw new NotSupportedException($"Telegram 适配器不支持发送 RawSegment(kind={raw.Kind})。");
+                    if (sticker is not null) throw new NotSupportedException("每条消息只能发送一个贴纸。");
+                    sticker = emoji.Id; break;
+                case ResourceSegment resource: attachments.Add(resource); break;
+                default: throw new NotSupportedException($"Telegram 不支持原生发送 {segment.GetType().Name}。");
             }
         }
-
-        return new OutgoingPlan(text.ToString(), replyTo, attachments);
+        if (sticker is not null && (text.Length != 0 || attachments.Count != 0))
+            throw new NotSupportedException("Telegram 贴纸不能与正文或媒体隐式拆分发送。");
+        return new(text.ToString(), replyTo, attachments, markdown ? "MarkdownV2" : null, sticker);
     }
 
-    public sealed record OutgoingPlan(string Text, string? ReplyToMessageId, IReadOnlyList<ResourceSegment> Attachments);
+    internal static string EscapeMarkdown(string value) => string.Concat(value.Select(c =>
+        "\\_*[]()~`>#+-=|{}.!".Contains(c) ? "\\" + c : c.ToString()));
+
+    public sealed record OutgoingPlan(string Text, string? ReplyToMessageId,
+        IReadOnlyList<ResourceSegment> Attachments, string? ParseMode = null, string? StickerId = null);
 
     // ─── 工具 ───
 
@@ -229,7 +249,13 @@ public static class TelegramMapper
             throw new ArgumentException($"Telegram 平台的 Channel.Id 必须是数字或 '数字:话题ID',实际为 '{channelId}'。");
         }
 
-        long? threadId = parts.Length == 2 && long.TryParse(parts[1], out var thread) ? thread : null;
+        long? threadId = null;
+        if (parts.Length == 2)
+        {
+            if (!long.TryParse(parts[1], out var thread) || thread <= 0)
+                throw new ArgumentException("Telegram 话题 ID 必须是正整数。", nameof(channelId));
+            threadId = thread;
+        }
         return (chatId, threadId);
     }
 

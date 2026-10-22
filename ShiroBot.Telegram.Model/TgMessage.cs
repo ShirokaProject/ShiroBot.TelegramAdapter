@@ -11,6 +11,15 @@ public sealed record TgMessage
     [JsonPropertyName("message_thread_id")]
     public long? MessageThreadId { get; init; }
 
+    [JsonPropertyName("sender_chat")]
+    public TgChat? SenderChat { get; init; }
+
+    [JsonPropertyName("animation")]
+    public TgDocument? Animation { get; init; }
+
+    [JsonPropertyName("video_note")]
+    public TgVideo? VideoNote { get; init; }
+
     [JsonPropertyName("from")]
     public TgUser? From { get; init; }
 
@@ -58,6 +67,10 @@ public sealed record TgMessage
 
     [JsonPropertyName("left_chat_member")]
     public TgUser? LeftChatMember { get; init; }
+
+    /// <summary>未显式建模的平台字段，原样保留。</summary>
+    [JsonExtensionData]
+    public Dictionary<string, System.Text.Json.JsonElement>? AdditionalData { get; init; }
 }
 
 /// <summary>`MessageEntity` — text 内的标记(mention/bot_command/text_mention 等)。</summary>
@@ -77,6 +90,10 @@ public sealed record TgMessageEntity
 
     [JsonPropertyName("user")]
     public TgUser? User { get; init; }
+
+    /// <summary>未显式建模的平台字段，原样保留。</summary>
+    [JsonExtensionData]
+    public Dictionary<string, System.Text.Json.JsonElement>? AdditionalData { get; init; }
 }
 
 public sealed record TgPhotoSize
@@ -95,6 +112,10 @@ public sealed record TgPhotoSize
 
     [JsonPropertyName("file_size")]
     public long? FileSize { get; init; }
+
+    /// <summary>未显式建模的平台字段，原样保留。</summary>
+    [JsonExtensionData]
+    public Dictionary<string, System.Text.Json.JsonElement>? AdditionalData { get; init; }
 }
 
 public sealed record TgAudio
@@ -110,6 +131,10 @@ public sealed record TgAudio
 
     [JsonPropertyName("file_size")]
     public long? FileSize { get; init; }
+
+    /// <summary>未显式建模的平台字段，原样保留。</summary>
+    [JsonExtensionData]
+    public Dictionary<string, System.Text.Json.JsonElement>? AdditionalData { get; init; }
 }
 
 public sealed record TgVoice
@@ -122,6 +147,10 @@ public sealed record TgVoice
 
     [JsonPropertyName("file_size")]
     public long? FileSize { get; init; }
+
+    /// <summary>未显式建模的平台字段，原样保留。</summary>
+    [JsonExtensionData]
+    public Dictionary<string, System.Text.Json.JsonElement>? AdditionalData { get; init; }
 }
 
 public sealed record TgVideo
@@ -143,6 +172,10 @@ public sealed record TgVideo
 
     [JsonPropertyName("file_size")]
     public long? FileSize { get; init; }
+
+    /// <summary>未显式建模的平台字段，原样保留。</summary>
+    [JsonExtensionData]
+    public Dictionary<string, System.Text.Json.JsonElement>? AdditionalData { get; init; }
 }
 
 public sealed record TgDocument
@@ -158,6 +191,10 @@ public sealed record TgDocument
 
     [JsonPropertyName("file_size")]
     public long? FileSize { get; init; }
+
+    /// <summary>未显式建模的平台字段，原样保留。</summary>
+    [JsonExtensionData]
+    public Dictionary<string, System.Text.Json.JsonElement>? AdditionalData { get; init; }
 }
 
 public sealed record TgSticker
@@ -170,6 +207,10 @@ public sealed record TgSticker
 
     [JsonPropertyName("set_name")]
     public string? SetName { get; init; }
+
+    /// <summary>未显式建模的平台字段，原样保留。</summary>
+    [JsonExtensionData]
+    public Dictionary<string, System.Text.Json.JsonElement>? AdditionalData { get; init; }
 }
 
 /// <summary>getFile 返回的 `File`。</summary>
@@ -183,4 +224,8 @@ public sealed record TgFile
 
     [JsonPropertyName("file_size")]
     public long? FileSize { get; init; }
+
+    /// <summary>未显式建模的平台字段，原样保留。</summary>
+    [JsonExtensionData]
+    public Dictionary<string, System.Text.Json.JsonElement>? AdditionalData { get; init; }
 }

@@ -22,4 +22,8 @@ public sealed record TgUser
 
     [JsonIgnore]
     public string DisplayName => LastName is null ? FirstName : $"{FirstName} {LastName}";
+
+    /// <summary>未显式建模的平台字段，原样保留。</summary>
+    [JsonExtensionData]
+    public Dictionary<string, System.Text.Json.JsonElement>? AdditionalData { get; init; }
 }
