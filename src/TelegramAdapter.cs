@@ -1,3 +1,4 @@
+using ShiroBot.TelegramAdapter.BotApi;
 using ShiroBot.TelegramAdapter.Services;
 using ShiroBot.SDK.Adapter;
 using ShiroBot.SDK.Config;
@@ -8,15 +9,17 @@ using ShiroBot.SDK.Plugin;
 
 namespace ShiroBot.TelegramAdapter;
 
-[BotAdapter("telegram", Name = "TelegramAdapter", Version = "0.3.0", Author = "ShirokaProject",
+[BotAdapter("telegram", Name = "TelegramAdapter", Version = "0.4.0", Author = "ShirokaProject",
     Description = "Telegram Bot API adapter for ShiroBot", Protocol = "telegram-bot-api")]
-public sealed class TelegramAdapter : IBotAdapter, IConfigurableAdapter, IConfigurableComponent<TelegramAdapterConfig>
+public sealed class TelegramAdapter : IBotAdapter, IConfigurableAdapter, IConfigurableComponent<TelegramAdapterConfig>,
+    ILifetimeAwareAdapter
 {
     private readonly TelegramMapper _mapper = new();
     private readonly TelegramEventService _events;
     private TelegramClient? _client;
     private TelegramInteractionService? _interactions;
     private TelegramReactionService? _reactions;
+    private TelegramBotApi? _botApi;
     private CancellationTokenSource? _pollingTokenSource;
     private Task? _pollingTask;
     private IMessageService? _message;
@@ -32,6 +35,9 @@ public sealed class TelegramAdapter : IBotAdapter, IConfigurableAdapter, IConfig
     public IEventService Event => _events;
     public IConfigContext Config { get; set; } = null!;
     public IConsoleLogger Logger { get; set; } = null!;
+
+    /// <summary>宿主在每次启动前注入；为空时（如测试中直接构造）适配器自行管理轮询任务。</summary>
+    public IPluginLifetime Lifetime { get; set; } = null!;
     public TelegramAdapterConfig CurrentConfigValue { get; private set; } = new();
     ConfigApplyMode IConfigurableAdapter.ApplyMode => ConfigApplyMode.RestartComponent;
 
@@ -47,7 +53,7 @@ public sealed class TelegramAdapter : IBotAdapter, IConfigurableAdapter, IConfig
         return Task.CompletedTask;
     }
 
-    public TService? GetExtension<TService>() where TService : class => this as TService ?? _client as TService ?? _message as TService ?? _user as TService ?? _interactions as TService ?? _reactions as TService;
+    public TService? GetExtension<TService>() where TService : class => this as TService ?? _client as TService ?? _message as TService ?? _user as TService ?? _interactions as TService ?? _reactions as TService ?? _botApi as TService;
 
     public async Task StartAsync()
     {
@@ -60,6 +66,7 @@ public sealed class TelegramAdapter : IBotAdapter, IConfigurableAdapter, IConfig
         try
         {
             _client = new TelegramClient(config.BotToken, config.ApiBaseUrl);
+            _botApi = new TelegramBotApi(_client);
             _interactions = new TelegramInteractionService(_client);
             _reactions = new TelegramReactionService(_client);
             _message = new TelegramMessageService(_client, _mapper, _interactions);
@@ -69,8 +76,16 @@ public sealed class TelegramAdapter : IBotAdapter, IConfigurableAdapter, IConfig
             _mapper.SelfId = self.Id;
             Logger.Success($"Telegram 登录成功 - {self.Name} ({self.Id})");
             _events.Attach(_client);
-            _pollingTokenSource = new CancellationTokenSource();
-            _pollingTask = RunPollingLoopAsync(_client, _pollingTokenSource.Token);
+            IPluginLifetime? lifetime = Lifetime;
+            _pollingTokenSource = lifetime is null
+                ? new CancellationTokenSource()
+                : CancellationTokenSource.CreateLinkedTokenSource(lifetime.Stopping);
+            var client = _client;
+            var token = _pollingTokenSource.Token;
+            // 交给宿主生命周期登记后，停止或热重载时宿主也会等待轮询结束。
+            _pollingTask = lifetime is null
+                ? RunPollingLoopAsync(client, token)
+                : lifetime.Run(_ => RunPollingLoopAsync(client, token));
         }
         catch
         {
@@ -89,6 +104,8 @@ public sealed class TelegramAdapter : IBotAdapter, IConfigurableAdapter, IConfig
         finally
         {
             if (_client is not null) _events.Detach(_client);
+            _botApi?.Detach();
+            _botApi = null;
             _pollingTokenSource?.Dispose();
             _client?.Dispose();
             _pollingTokenSource = null;
