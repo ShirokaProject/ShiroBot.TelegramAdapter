@@ -1,8 +1,8 @@
 # Telegram 适配器覆盖清单
 
-版本 `0.3.0`，SDK `1.0.1`。以下清单同时列出两个平台的语义差异。
+版本 `0.4.0`，SDK `1.0.3`，Telegram Bot API `10.4`。以下清单同时列出两个平台的语义差异。
 
-## SDK API 清单（1.0.1）
+## SDK API 清单（1.0.3）
 
 所有方法均由适配器显式声明实现，回归测试使用接口映射检查，防止意外调用 SDK 默认实现。
 “不支持”项会抛出带平台原因的 `NotSupportedException`，不会返回伪造成功或不完整列表。
@@ -70,11 +70,27 @@
 | FileCapabilities / FileUploadRequest / FileUploadResult | 支持上传、发布语义、范围限定凭据 | 支持上传、发布语义、范围限定凭据 |
 
 接收到的协议 DTO 使用 `JsonExtensionData` 保存未建模字段，事件的 `Raw` 保留完整已接收数据。
-这不是对 Discord / Telegram 全部协议对象进行强类型重写；覆盖范围是 SDK 1.0.1 合约，
-额外平台字段通过原始数据提供。SDK/宿主负责写入 `InstanceId`、构造路由引用和包装发送结果。
+SDK 映射层只覆盖 SDK 1.0.3 合约；Telegram 的全部协议对象另由下文的 `ITelegramBotApi` 强类型提供。SDK/宿主负责写入 `InstanceId`、构造路由引用和包装发送结果。
 
 按钮回调将 ID 与 Data 一起编码，长度校验按编码后的实际字节计算。不会截断回调数据。
 交互令牌和上传句柄缓存有容量限制，实例停止后释放；不能跨实例复用。
+
+## Telegram Bot API 10.4 清单
+
+`ITelegramBotApi`（`GetExtension<ITelegramBotApi>()` / `Context.GetAdapterExtension<ITelegramBotApi>()`）
+由 `scripts/codegen` 按规范生成，回归测试逐项核对规范中的方法和类型均已生成。
+
+| 范围 | 数量 | 说明 |
+| --- | --- | --- |
+| 方法 | 193 | 每个方法一个强类型重载，参数与官方文档一一对应；另有 `CallAsync` 调用规范之后新增的方法 |
+| 类型 | 395 | `ShiroBot.Telegram.Model.BotApi` 命名空间，未知字段保存在 `AdditionalData` |
+| 联合类型 | 31 | 接口 + 鉴别字段解析；未知取值为 `*Unknown`，含 `ReplyMarkup` 等多类型参数 |
+| Update 种类 | 29 | 长轮询全部订阅；`UpdateReceived` 提供强类型 `Update`，SDK 事件映射保持不变 |
+| 上传 | 全部 | 方法参数直接上传；`InputMedia*`、`InputPaidMedia*`、`InputSticker`、`InputProfilePhoto*`、`InputStoryContent*` 中以 `attach://` 上传 |
+| 错误 | 全部 | `TelegramApiException`：`ErrorCode`、`Description`、`RetryAfter`、`MigrateToChatId` |
+
+Bot API 自身的限制不变：没有按 ID 读取任意消息、历史消息、完整成员列表和会话枚举的方法；
+调用 `getUpdates` 或 `setWebhook` 会与适配器的长轮询冲突。
 
 ## 验证
 
@@ -84,7 +100,8 @@ dotnet build -c Release
 ```
 
 回归测试覆盖所有 SDK API 是否显式实现、核心 REST 请求参数、原生按钮数据往返、交互确认幂等性、
-Reaction、上传内容及会话隔离、共享用户 Model、未知字段保留、事件类型及平台不支持项。
+Reaction、上传内容及会话隔离、共享用户 Model、未知字段保留、事件类型及平台不支持项；
+Bot API 部分覆盖规范完整性、JSON/multipart/`attach://` 请求、联合类型与未知值、错误参数和强类型 Update。
 测试使用模拟 HTTP，不访问真实机器人账号。真实账号权限、网络连接和平台服务端行为需配置 Token 后联调。
 
 协议依据：[Discord Message](https://docs.discord.com/developers/resources/message)、
