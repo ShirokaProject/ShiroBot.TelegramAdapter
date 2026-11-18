@@ -405,7 +405,7 @@ internal static class TelegramModelConverter
     ///     否则返回 attach:// 引用，用于 InputMedia 等嵌套对象。
     /// </summary>
     public static async Task<JsonNode?> FileAsync(string uri, string? fileName, string parameter, string? attachName,
-        List<TelegramUpload> uploads, HttpClient? downloads, CancellationToken token)
+        List<TelegramUpload> uploads, TelegramClient? client, CancellationToken token)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(uri);
         if (uri.StartsWith("tgfile://", StringComparison.Ordinal)) return uri[9..];
@@ -413,8 +413,8 @@ internal static class TelegramModelConverter
         if (!(Path.IsPathFullyQualified(uri) || uri.StartsWith("file:", StringComparison.OrdinalIgnoreCase)
               || uri.StartsWith("data:", StringComparison.Ordinal) || uri.StartsWith("base64://", StringComparison.Ordinal)))
             return uri; // 已有的 file_id
-        var file = await ResourceReader.ReadAsync(uri, fileName, token, downloads);
-        uploads.Add(new TelegramUpload(attachName ?? parameter, file.FileName, new MemoryStream(file.Bytes)));
+        var file = await ResourceReader.ReadAsync(uri, fileName, token, client);
+        uploads.Add(new TelegramUpload(attachName ?? parameter, file.FileName, file.OpenRead()));
         return attachName is null ? null : "attach://" + attachName;
     }
 }

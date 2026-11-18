@@ -89,9 +89,9 @@ public sealed class TelegramModelApi(TelegramClient client, TelegramMapper mappe
     public async Task SetPhotoAsync(string chatId, string imageUri, CancellationToken cancellationToken = default)
     {
         // setChatPhoto 只接受上传内容，不接受 file_id 或地址。
-        var file = await ResourceReader.ReadAsync(imageUri, "photo.jpg", cancellationToken, client.Downloads);
+        var file = await ResourceReader.ReadAsync(imageUri, "photo.jpg", cancellationToken, client);
         await Call("setChatPhoto", new JsonObject { ["chat_id"] = Target(chatId) }, cancellationToken,
-            [new TelegramUpload("photo", file.FileName, new MemoryStream(file.Bytes))]);
+            [new TelegramUpload("photo", file.FileName, file.OpenRead())]);
     }
 
     public Task DeletePhotoAsync(string chatId, CancellationToken cancellationToken = default) =>
@@ -241,7 +241,7 @@ public sealed class TelegramModelApi(TelegramClient client, TelegramMapper mappe
                 break;
             case TelegramStickerContent sticker:
                 method = "sendSticker";
-                parameters["sticker"] = await FileAsync(sticker.Sticker, "sticker.webp", "sticker", null, uploads, client.Downloads,
+                parameters["sticker"] = await FileAsync(sticker.Sticker, "sticker.webp", "sticker", null, uploads, client,
                     cancellationToken);
                 parameters["emoji"] = sticker.Emoji;
                 break;
@@ -277,7 +277,7 @@ public sealed class TelegramModelApi(TelegramClient client, TelegramMapper mappe
                             _ => throw new NotSupportedException("未知的相册媒体类型：" + item.Kind)
                         },
                         ["media"] = await FileAsync(item.Uri, item.FileName, "media", "shirobot_file" + uploads.Count.ToString(CultureInfo.InvariantCulture),
-                            uploads, client.Downloads, cancellationToken),
+                            uploads, client, cancellationToken),
                         ["caption"] = item.Caption, ["parse_mode"] = ParseMode(item.ParseMode),
                         ["has_spoiler"] = item.HasSpoiler && item.Kind is TelegramMediaKind.Photo or TelegramMediaKind.Video ? true : null
                     });

@@ -72,6 +72,8 @@ internal static class ClientCoverage
                   && raw?.Contains("\"update_id\":9") == true, "Polling does not subscribe to every update kind.");
         }
 
+        await LargeFilesAsync(token);
+
         var proxy = TelegramClient.CreateProxy("socks5://user:p%40ss@127.0.0.1:7891")!;
         var credentials = (NetworkCredential)proxy.Credentials!;
         Check(proxy.Address!.AbsoluteUri == "socks5://127.0.0.1:7891/" && credentials.UserName == "user" && credentials.Password == "p@ss",
@@ -86,6 +88,96 @@ internal static class ClientCoverage
         try { using var _ = new TelegramClient("bad token/with space"); throw new Exception("Malformed token accepted."); }
         catch (ArgumentException) { }
         Console.WriteLine("Telegram client: real token URLs, custom API root and proxy settings verified.");
+    }
+
+    /// <summary>官方服务器拒绝超过 50 MB 的文件；自建服务器流式上传本地大文件，远程大文件经临时文件上传后删除。</summary>
+    private static async Task LargeFilesAsync(string token)
+    {
+        const long size = 60L * 1024 * 1024;
+        var path = Path.Combine(Path.GetTempPath(), "shirobot-verify-" + Guid.NewGuid().ToString("N") + ".mp4");
+        await using (var file = File.Create(path)) file.SetLength(size);
+        try
+        {
+            var video = new ShiroBot.SDK.Models.VideoSegment(path);
+            var channel = new ShiroBot.SDK.Models.Channel("-100", ShiroBot.SDK.Models.ChannelType.Group);
+
+            using (var official = new TelegramClient(token, handler: new UploadCounter(0)))
+            {
+                try
+                {
+                    await new ShiroBot.TelegramAdapter.Services.TelegramMessageService(official).SendMessageAsync(channel, [video]);
+                    throw new Exception("60 MB upload accepted by the official server.");
+                }
+                catch (NotSupportedException error)
+                {
+                    Check(error.Message.Contains("60 MB") && error.Message.Contains("API Base URL"), "Oversize message is not actionable: " + error.Message);
+                }
+            }
+
+            var local = new UploadCounter(size);
+            using (var client = new TelegramClient(token, "http://127.0.0.1:8081", local))
+                await new ShiroBot.TelegramAdapter.Services.TelegramMessageService(client).SendMessageAsync(channel, [video]);
+            Check(local.UploadedBytes >= size && local.Methods.Contains("sendVideo"), "Large local file not uploaded to the local server.");
+
+            var temporaryBefore = Directory.GetFiles(Path.GetTempPath(), "shirobot-telegram-*").Length;
+            var remote = new UploadCounter(size);
+            using (var client = new TelegramClient(token, "http://127.0.0.1:8081", remote))
+                await new ShiroBot.TelegramAdapter.Services.TelegramMessageService(client).SendMessageAsync(channel,
+                    [new ShiroBot.SDK.Models.VideoSegment("https://cdn.example/big.mp4")]);
+            Check(remote.UploadedBytes >= size, "Large remote file not uploaded.");
+            Check(Directory.GetFiles(Path.GetTempPath(), "shirobot-telegram-*").Length == temporaryBefore, "Temporary download not deleted.");
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    /// <summary>为远程下载返回指定大小的内容，统计上传的字节数而不缓存请求体。</summary>
+    private sealed class UploadCounter(long downloadSize) : HttpMessageHandler
+    {
+        public long UploadedBytes { get; private set; }
+        public List<string> Methods { get; } = [];
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
+        {
+            if (request.RequestUri!.Host == "cdn.example")
+                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(new ZeroStream(downloadSize)) };
+            Methods.Add(request.RequestUri.Segments.Last());
+            if (request.Content is not null)
+            {
+                await using var body = await request.Content.ReadAsStreamAsync(token);
+                var buffer = new byte[81920];
+                int count;
+                while ((count = await body.ReadAsync(buffer, token)) != 0) UploadedBytes += count;
+            }
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"ok":true,"result":{"message_id":1,"date":1,"chat":{"id":-100,"type":"supergroup"}}}""",
+                    Encoding.UTF8, "application/json")
+            };
+        }
+    }
+
+    private sealed class ZeroStream(long length) : Stream
+    {
+        private long _position;
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => length;
+        public override long Position { get => _position; set => throw new NotSupportedException(); }
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            var read = (int)Math.Min(count, length - _position);
+            Array.Clear(buffer, offset, read);
+            _position += read;
+            return read;
+        }
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
     private sealed class ErrorHandler : HttpMessageHandler

@@ -92,6 +92,9 @@ await raw.CallAsync("sendPhoto", new JsonObject { ["chat_id"] = 123456 }, [new T
 文件、交互确认和 Reaction 接口；平台没有等价接口的功能明确返回不支持。
 
 文件可来自 HTTP(S)、本地绝对路径、file URI、base64:// 或 base64 data URI，使用 multipart 上传。
+官方服务器限制机器人上传的文件最大 50 MB；需要发送更大的文件（例如长视频）时，自建
+[Telegram Bot API Server](https://github.com/tdlib/telegram-bot-api) 并以 `--local` 模式运行，上限为 2000 MB，
+然后在 **API Base URL** 中填写它的地址。超过 50 MB 的文件从磁盘流式上传，远程文件先写入临时文件，上传后删除。
 上传会同时发布文件，并返回限定于当前实例和会话的凭据，不会伪造消息 ID。
 原生按钮和回调保留 ButtonId/Data，重复的交互确认是幂等的。
 

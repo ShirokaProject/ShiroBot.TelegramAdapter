@@ -47,6 +47,11 @@ public sealed class TelegramClient : IDisposable
         _downloads.Timeout = TimeSpan.FromMinutes(2);
     }
 
+    /// <summary>上传上限：官方服务器 50 MB，自建 Bot API Server 2000 MB。</summary>
+    internal long MaxUploadBytes => _apiRoot.Host.Equals("api.telegram.org", StringComparison.OrdinalIgnoreCase)
+        ? ResourceReader.OfficialMaxBytes
+        : ResourceReader.LocalServerMaxBytes;
+
     /// <summary>下载资源使用的客户端，与 Bot API 使用同一代理。</summary>
     internal HttpClient Downloads => _downloads;
 
@@ -102,8 +107,8 @@ public sealed class TelegramClient : IDisposable
             var text = value is string str ? str : JsonSerializer.Serialize(value, JsonOptions);
             form.Add(new StringContent(text, Encoding.UTF8), name);
         }
-        form.Add(new ByteArrayContent(file.Bytes), field, file.FileName);
-        if (thumbnail is not null) form.Add(new ByteArrayContent(thumbnail.Bytes), "thumbnail", thumbnail.FileName);
+        form.Add(file.CreateContent(), field, file.FileName);
+        if (thumbnail is not null) form.Add(thumbnail.CreateContent(), "thumbnail", thumbnail.FileName);
         using var response = await _http.PostAsync(method, form, token);
         var result = await ReadResultAsync(method, response, token);
         return result.Deserialize<T>(JsonOptions) ?? throw new TelegramApiException(method, null, "响应结果为空。");
