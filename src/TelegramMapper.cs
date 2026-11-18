@@ -32,7 +32,7 @@ public sealed class TelegramMapper
     internal IReadOnlyList<MessageSegment> ResolveMentions(IReadOnlyList<MessageSegment> segments) =>
         segments.Select(segment => segment is MentionSegment mention && !long.TryParse(mention.UserId, out _)
                                    && Usernames.TryGet(mention.UserId.TrimStart('@').ToLowerInvariant(), out var id)
-            ? mention with { UserId = id }
+            ? mention with { UserId = id, DisplayName = Users.TryGet(id, out var user) ? user.DisplayName : mention.DisplayName }
             : segment).ToArray();
     internal BoundedCache<TgChat> Chats { get; } = new();
     internal BoundedCache<(string ChannelId, string FileId)> Uploads { get; } = new();
@@ -61,7 +61,8 @@ public sealed class TelegramMapper
 
     public static Sdk.User ToUser(TgUser user) => new(user.Id.ToString())
     {
-        Name = user.Username ?? user.DisplayName,
+        // 显示名（名字 + 姓氏）是用户在 Telegram 中看到的名字；用户名只在没有名字时使用。
+        Name = string.IsNullOrWhiteSpace(user.DisplayName) ? user.Username : user.DisplayName,
         IsBot = user.IsBot
     };
 

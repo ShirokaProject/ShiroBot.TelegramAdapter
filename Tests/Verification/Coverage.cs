@@ -56,6 +56,7 @@ internal static class Coverage
         }
         await Emit("""{"update_id":1,"message":{"message_id":1,"date":1,"chat":{"id":-100,"type":"supergroup"},"from":{"id":7,"first_name":"First","last_name":"Last","username":"user"},"text":"hello","future_field":{"keep":true}}}""");
         var incoming = (MessageEvent)received.Last();
+        Check(incoming.Sender.Name == "First Last", "Sender name must be the Telegram display name, not the username.");
         Check(incoming.Raw is ShiroBot.Model.Telegram.TelegramMessage { MessageId: 1 } native
               && native.Json.GetProperty("future_field").GetProperty("keep").GetBoolean()
               && incoming.Segments.OfType<RawSegment>().Any(s => s.Kind == "future_field"), "Unknown message fields lost.");

@@ -169,7 +169,8 @@ internal static class ModelCoverage
         await Emit("""{"update_id":22,"message":{"message_id":8,"date":1,"chat":{"id":-100,"type":"supergroup"},"from":{"id":4242,"is_bot":true,"first_name":"Bot","username":"MyShiroBot"},"text":"hi"}}""");
         await Emit("""{"update_id":23,"message":{"message_id":9,"date":1,"chat":{"id":-100,"type":"supergroup"},"from":{"id":7,"is_bot":false,"first_name":"A"},"text":"@myshirobot hello @stranger","entities":[{"type":"mention","offset":0,"length":11},{"type":"mention","offset":18,"length":9}]}}""");
         var mentioned = (MessageEvent)received.Last();
-        Check(mentioned.HasMention("4242") && mentioned.Segments.OfType<MentionSegment>().Last() is { UserId: "stranger", DisplayName: "stranger" },
+        Check(mentioned.HasMention("4242") && mentioned.Segments.OfType<MentionSegment>().First() is { DisplayName: "Bot" }
+              && mentioned.Segments.OfType<MentionSegment>().Last() is { UserId: "stranger", DisplayName: "stranger" },
             "Username mentions not resolved: " + string.Join(", ", mentioned.Segments.OfType<MentionSegment>().Select(m => m.UserId + "/" + m.DisplayName)));
 
         await Emit("""{"update_id":3,"edited_message":{"message_id":6,"date":1,"edit_date":50,"chat":{"id":1,"type":"private"},"text":"new"}}""");
