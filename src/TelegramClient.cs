@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
@@ -16,6 +17,7 @@ public sealed class TelegramClient : IDisposable
     };
 
     private readonly HttpClient _http;
+    private readonly HttpClient _downloads;
     private readonly string _token;
     private readonly Uri _apiRoot;
     private long _updateOffset;
@@ -25,22 +27,58 @@ public sealed class TelegramClient : IDisposable
     /// <summary>每个 Update 的原始 JSON，先于 <see cref="UpdateReceived"/> 触发。</summary>
     public event Func<JsonElement, Task>? RawUpdateReceived;
 
-    public TelegramClient(string token, string? apiBaseUrl = null, HttpMessageHandler? handler = null)
+    /// <param name="proxy">代理地址，支持 http、https、socks4、socks4a、socks5，可带 user:password@；留空使用系统代理设置。</param>
+    public TelegramClient(string token, string? apiBaseUrl = null, HttpMessageHandler? handler = null, string? proxy = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(token);
+        token = token.Trim();
+        if (token.Any(c => char.IsWhiteSpace(c) || c is '/' or '?' or '#'))
+            throw new ArgumentException("Bot Token 格式不正确，应形如 123456789:AA…。", nameof(token));
         _token = token;
-        _apiRoot = new Uri((string.IsNullOrWhiteSpace(apiBaseUrl) ? "https://api.telegram.org" : apiBaseUrl.TrimEnd('/')) + "/");
-        if (_apiRoot.Scheme is not ("https" or "http"))
+        if (!Uri.TryCreate((string.IsNullOrWhiteSpace(apiBaseUrl) ? "https://api.telegram.org" : apiBaseUrl.Trim().TrimEnd('/')) + "/",
+                UriKind.Absolute, out var root) || root.Scheme is not ("https" or "http"))
             throw new ArgumentException("API Base URL 必须是 HTTP(S) 地址。", nameof(apiBaseUrl));
-        _http = (handler is null ? new HttpClient() : new HttpClient(handler));
-        _http.BaseAddress = new Uri(_apiRoot, $"bot{token}/");
+        _apiRoot = root;
+        var webProxy = CreateProxy(proxy);
+        _http = handler is null ? new HttpClient(CreateHandler(webProxy)) : new HttpClient(handler, disposeHandler: false);
+        // Token 含冒号：用字符串拼接，作为相对 URI 时 "bot123:AA…" 会被当成 URI scheme。
+        _http.BaseAddress = new Uri(_apiRoot.AbsoluteUri + "bot" + token + "/");
         _http.Timeout = TimeSpan.FromSeconds(120);
+        _downloads = handler is null ? new HttpClient(CreateHandler(webProxy)) : new HttpClient(handler, disposeHandler: false);
+        _downloads.Timeout = TimeSpan.FromMinutes(2);
     }
 
-    public void Dispose() => _http.Dispose();
+    /// <summary>下载资源使用的客户端，与 Bot API 使用同一代理。</summary>
+    internal HttpClient Downloads => _downloads;
+
+    public static WebProxy? CreateProxy(string? proxy)
+    {
+        if (string.IsNullOrWhiteSpace(proxy)) return null;
+        if (!Uri.TryCreate(proxy.Trim(), UriKind.Absolute, out var uri)
+            || uri.Scheme is not ("http" or "https" or "socks4" or "socks4a" or "socks5") || string.IsNullOrEmpty(uri.Host))
+            throw new ArgumentException("代理地址格式不正确，例如 http://127.0.0.1:7890 或 socks5://127.0.0.1:7891。", nameof(proxy));
+        var webProxy = new WebProxy(new UriBuilder(uri) { UserName = "", Password = "" }.Uri);
+        if (!string.IsNullOrEmpty(uri.UserInfo))
+        {
+            var parts = uri.UserInfo.Split(':', 2);
+            webProxy.Credentials = new NetworkCredential(Uri.UnescapeDataString(parts[0]),
+                parts.Length > 1 ? Uri.UnescapeDataString(parts[1]) : "");
+        }
+        return webProxy;
+    }
+
+    private static SocketsHttpHandler CreateHandler(WebProxy? proxy) => proxy is null
+        ? new SocketsHttpHandler()
+        : new SocketsHttpHandler { Proxy = proxy, UseProxy = true };
+
+    public void Dispose()
+    {
+        _http.Dispose();
+        _downloads.Dispose();
+    }
 
     public string GetFileDownloadUrl(string filePath) =>
-        new Uri(_apiRoot, $"file/bot{_token}/{filePath}").AbsoluteUri;
+        new Uri(_apiRoot.AbsoluteUri + "file/bot" + _token + "/" + filePath.TrimStart('/')).AbsoluteUri;
 
     public async Task<T> CallAsync<T>(string method, object? payload = null, CancellationToken cancellationToken = default)
     {

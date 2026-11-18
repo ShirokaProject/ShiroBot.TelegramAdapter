@@ -53,7 +53,8 @@ internal static class ResourceReader
         if (Uri.TryCreate(uri, UriKind.Absolute, out var parsed) && parsed.Scheme is "http" or "https" or "file") return;
         throw new NotSupportedException("资源必须是 HTTP(S)、本地绝对路径、file URI、data URI 或 base64:// 数据。");
     }
-    public static async Task<ResourceBytes> ReadAsync(string uri, string? fileName, CancellationToken token)
+    /// <param name="downloads">下载 HTTP(S) 资源的客户端；适配器传入带代理设置的实例。</param>
+    public static async Task<ResourceBytes> ReadAsync(string uri, string? fileName, CancellationToken token, HttpClient? downloads = null)
     {
         token.ThrowIfCancellationRequested();
         Validate(uri);
@@ -65,7 +66,7 @@ internal static class ResourceReader
         }
         if (Uri.TryCreate(uri, UriKind.Absolute, out var remote) && remote.Scheme is "http" or "https")
         {
-            using var response = await Downloads.GetAsync(remote, HttpCompletionOption.ResponseHeadersRead, token);
+            using var response = await (downloads ?? Downloads).GetAsync(remote, HttpCompletionOption.ResponseHeadersRead, token);
             response.EnsureSuccessStatusCode();
             await using var input = await response.Content.ReadAsStreamAsync(token);
             return new(await ReadLimitedAsync(input, token), SafeName(fileName ?? Path.GetFileName(remote.LocalPath)));

@@ -66,7 +66,7 @@ public sealed class TelegramAdapter : IBotAdapter, IConfigurableAdapter, IConfig
 
         try
         {
-            _client = new TelegramClient(config.BotToken, config.ApiBaseUrl);
+            _client = new TelegramClient(config.BotToken, config.ApiBaseUrl, proxy: config.Proxy);
             _interactions = new TelegramInteractionService(_client, config.AutoAnswerCallbacks);
             _botApi = new TelegramBotApi(_client);
             _model = new TelegramModelApi(_botApi, _client, _mapper, _interactions);
@@ -160,6 +160,10 @@ public sealed class TelegramAdapterConfig
     [ConfigField("留空使用官方服务器 https://api.telegram.org。使用自建 Telegram Bot API Server 时填写其地址，例如 http://127.0.0.1:8081。",
         Label = "API Base URL", Group = "connection", GroupLabel = "连接", GroupOrder = 10, Order = 20)]
     public string? ApiBaseUrl { get; set; }
+
+    [ConfigField("访问 Telegram 使用的代理，Bot API 请求和资源下载都经过它。支持 http://、https://、socks5://、socks4://，可带账号，如 socks5://user:pass@127.0.0.1:7891。留空使用系统代理设置。",
+        Label = "代理", Group = "connection", GroupLabel = "连接", GroupOrder = 10, Order = 25)]
+    public string? Proxy { get; set; }
 
     [ConfigField("开启时收到按钮回调立即确认，客户端按钮不会转圈。关闭后由插件调用 AnswerCallbackAsync 确认，可附带提示或弹窗；插件未在 10 秒内确认时按钮会一直转圈。",
         Label = "自动确认按钮回调", Group = "behavior", GroupLabel = "行为", GroupOrder = 20, Order = 30)]

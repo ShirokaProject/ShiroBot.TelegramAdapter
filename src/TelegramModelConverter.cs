@@ -364,7 +364,7 @@ internal static class TelegramModelConverter
     };
 
     /// <summary>资源 URI 转为 Bot API 文件：file_id（可带 tgfile://）和 HTTP(S) 交给 Telegram，本地与 base64 内容由适配器上传。</summary>
-    public static async Task<Api.InputFile> InputFileAsync(string uri, string? fileName, CancellationToken token)
+    public static async Task<Api.InputFile> InputFileAsync(string uri, string? fileName, CancellationToken token, HttpClient? downloads = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(uri);
         if (uri.StartsWith("tgfile://", StringComparison.Ordinal)) return Api.InputFile.FromFileId(uri[9..]);
@@ -373,7 +373,7 @@ internal static class TelegramModelConverter
         if (Path.IsPathFullyQualified(uri) || uri.StartsWith("file:", StringComparison.OrdinalIgnoreCase)
             || uri.StartsWith("data:", StringComparison.Ordinal) || uri.StartsWith("base64://", StringComparison.Ordinal))
         {
-            var file = await ResourceReader.ReadAsync(uri, fileName, token);
+            var file = await ResourceReader.ReadAsync(uri, fileName, token, downloads);
             return Api.InputFile.FromBytes(file.Bytes, file.FileName);
         }
         return Api.InputFile.FromFileId(uri);

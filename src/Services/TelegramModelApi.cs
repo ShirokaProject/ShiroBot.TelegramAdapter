@@ -76,7 +76,7 @@ public sealed class TelegramModelApi(TelegramBotApi api, TelegramClient client, 
     public async Task SetPhotoAsync(string chatId, string imageUri, CancellationToken cancellationToken = default)
     {
         // setChatPhoto 只接受上传内容，不接受 file_id 或地址。
-        var file = await ResourceReader.ReadAsync(imageUri, "photo.jpg", cancellationToken);
+        var file = await ResourceReader.ReadAsync(imageUri, "photo.jpg", cancellationToken, client.Downloads);
         await api.SetChatPhotoAsync(Target(chatId), Api.InputFile.FromBytes(file.Bytes, file.FileName), cancellationToken);
     }
 
@@ -214,7 +214,7 @@ public sealed class TelegramModelApi(TelegramBotApi api, TelegramClient client, 
                     replyMarkup: markup, cancellationToken: cancellationToken);
                 break;
             case TelegramStickerContent sticker:
-                sent = await api.SendStickerAsync(await InputFileAsync(sticker.Sticker, "sticker.webp", cancellationToken),
+                sent = await api.SendStickerAsync(await InputFileAsync(sticker.Sticker, "sticker.webp", cancellationToken, client.Downloads),
                     business, chat, thread, emoji: sticker.Emoji, disableNotification: silent, protectContent: protect,
                     allowPaidBroadcast: paid, messageEffectId: effect, replyParameters: reply, replyMarkup: markup,
                     cancellationToken: cancellationToken);
@@ -238,7 +238,7 @@ public sealed class TelegramModelApi(TelegramBotApi api, TelegramClient client, 
                 if (group.Items.Count is < 2 or > 10) throw new ArgumentException("相册需要 2–10 项。");
                 var media = new List<Api.InputMedia>();
                 foreach (var item in group.Items)
-                    media.Add(await MediaAsync(item, cancellationToken));
+                    media.Add(await MediaAsync(item, cancellationToken, client.Downloads));
                 var album = await api.SendMediaGroupAsync(chat, media, business, thread, disableNotification: silent,
                     protectContent: protect, allowPaidBroadcast: paid, messageEffectId: effect, replyParameters: reply,
                     cancellationToken: cancellationToken);
@@ -250,9 +250,9 @@ public sealed class TelegramModelApi(TelegramBotApi api, TelegramClient client, 
         return [Sent(sent)];
     }
 
-    private static async Task<Api.InputMedia> MediaAsync(TelegramMediaItem item, CancellationToken token)
+    private static async Task<Api.InputMedia> MediaAsync(TelegramMediaItem item, CancellationToken token, HttpClient downloads)
     {
-        var file = await InputFileAsync(item.Uri, item.FileName, token);
+        var file = await InputFileAsync(item.Uri, item.FileName, token, downloads);
         var parseMode = ParseMode(item.ParseMode);
         bool? spoiler = item.HasSpoiler ? true : null;
         return item.Kind switch

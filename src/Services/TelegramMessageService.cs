@@ -107,7 +107,7 @@ public sealed class TelegramMessageService(TelegramClient client, TelegramMapper
             payload["caption"] = string.IsNullOrWhiteSpace(plan.Text) ? null : plan.Text;
             var uri = ResolveResource(resource.Uri, channel);
             var thumbnail = resource is VideoSegment { ThumbnailUri: { } thumbnailUri }
-                ? await ResourceReader.ReadAsync(thumbnailUri, "thumbnail.jpg", cancellationToken) : null;
+                ? await ResourceReader.ReadAsync(thumbnailUri, "thumbnail.jpg", cancellationToken, client.Downloads) : null;
             if (thumbnail is not null && uri.StartsWith("tgfile://", StringComparison.Ordinal))
                 uri = await GetResourceUrlAsync(uri, cancellationToken);
             if (uri.StartsWith("tgfile://", StringComparison.Ordinal))
@@ -117,7 +117,7 @@ public sealed class TelegramMessageService(TelegramClient client, TelegramMapper
             }
             else
             {
-                var file = await ResourceReader.ReadAsync(uri, resource.FileName, cancellationToken);
+                var file = await ResourceReader.ReadAsync(uri, resource.FileName, cancellationToken, client.Downloads);
                 sent = await client.CallMultipartAsync<TgMessage>(method, payload, field, file, cancellationToken, thumbnail);
             }
         }
@@ -168,7 +168,7 @@ public sealed class TelegramMessageService(TelegramClient client, TelegramMapper
             sent = await client.CallAsync<TgMessage>("sendDocument", payload, cancellationToken);
         }
         else sent = await client.CallMultipartAsync<TgMessage>("sendDocument", payload, "document",
-            await ResourceReader.ReadAsync(uri, request.FileName, cancellationToken), cancellationToken);
+            await ResourceReader.ReadAsync(uri, request.FileName, cancellationToken, client.Downloads), cancellationToken);
         var fileId = sent.Document?.FileId ?? throw new InvalidOperationException("Telegram 未返回文档上传凭据。");
         var handle = "tgupload://" + Guid.NewGuid().ToString("N");
         _mapper.Uploads.Set(handle, (channel.Id, fileId));
