@@ -1,8 +1,8 @@
 # Telegram 适配器覆盖清单
 
-版本 `0.4.0`，SDK `1.0.3`，Telegram Bot API `10.4`。以下清单同时列出两个平台的语义差异。
+版本 `0.5.0`，SDK `1.0.4`（Telegram Model 1.1），Telegram Bot API `10.4`。以下清单同时列出两个平台的语义差异。
 
-## SDK API 清单（1.0.3）
+## SDK API 清单（1.0.4）
 
 所有方法均由适配器显式声明实现，回归测试使用接口映射检查，防止意外调用 SDK 默认实现。
 “不支持”项会抛出带平台原因的 `NotSupportedException`，不会返回伪造成功或不完整列表。
@@ -74,6 +74,22 @@ SDK 映射层只覆盖 SDK 1.0.3 合约；Telegram 的全部协议对象另由�
 
 按钮回调将 ID 与 Data 一起编码，长度校验按编码后的实际字节计算。不会截断回调数据。
 交互令牌和上传句柄缓存有容量限制，实例停止后释放；不能跨实例复用。
+
+## Telegram Model 1.1 清单
+
+| 接口 / 契约 | 实现 |
+| --- | --- |
+| ITelegramChatApi | getChat、getChatMemberCount、getChatMember、getChatAdministrators、ban/unban/restrict/promoteChatMember、setChatAdministratorCustomTitle、setChatPermissions、setChatTitle/Description/Photo、deleteChatPhoto、pin/unpin/unpinAll（话题用 unpinAllForumTopicMessages）、export/create/edit/revokeChatInviteLink、approve/declineChatJoinRequest、leaveChat、create/edit/close/reopen/deleteForumTopic |
+| ITelegramMessageApi | sendMessage/Poll/Location/Venue/Contact/Dice/Sticker/Invoice/MediaGroup（本地内容以 attach:// 上传）、editMessageText/Caption/ReplyMarkup（含 inline 消息）、forward/copyMessage、deleteMessages、sendChatAction、stopPoll、带提示的 answerCallbackQuery |
+| ITelegramInlineApi | answerInlineQuery：文章、图片（地址或 file_id）、贴纸 |
+| ITelegramPaymentApi | answerPreCheckoutQuery、answerShippingQuery、refundStarPayment、getMyStarBalance |
+| ITelegramBotProfileApi | getMe、已见用户缓存、set/get/deleteMyCommands（全部范围）、setMyName/Description/ShortDescription |
+| ITelegramRawApi | 任意方法 + multipart 上传，原始 Update 事件 |
+| MessageEvent.Raw | `TelegramMessage`：发送者会话、编辑时间、相册 ID、转发来源、话题、inline 机器人、签名、企业连接、原始 JSON |
+| RawSegment | venue（同时带 location 时只报地点）、location、contact、dice、poll、successful_payment、formatted_text；其他未建模字段保持 `JsonElement` |
+| PlatformEvent | message_edited、chat_member_updated、my_chat_member_updated、chat_join_request、inline_query、chosen_inline_result、poll、poll_answer、pre_checkout_query、shipping_query、chat_boost、removed_chat_boost 使用 Model 负载；其他 Update 为 `JsonElement` |
+
+已转换为 `TelegramMessage` 资料的元数据字段（如 media_group_id、forward_origin、edit_date）不再重复作为 RawSegment 上报。
 
 ## Telegram Bot API 10.4 清单
 

@@ -50,12 +50,15 @@ internal static class Coverage
         events.EventReceived += e => { received.Add(e); return Task.CompletedTask; };
         async Task Emit(string json)
         {
-            var update = JsonSerializer.Deserialize<TgUpdate>(json)!;
-            await (Task)typeof(TelegramEventService).GetMethod("OnUpdateAsync", BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(events, [update])!;
+            using var document = JsonDocument.Parse(json);
+            await (Task)typeof(TelegramEventService).GetMethod("OnRawUpdateAsync", BindingFlags.NonPublic | BindingFlags.Instance)!
+                .Invoke(events, [document.RootElement.Clone()])!;
         }
         await Emit("""{"update_id":1,"message":{"message_id":1,"date":1,"chat":{"id":-100,"type":"supergroup"},"from":{"id":7,"first_name":"First","last_name":"Last","username":"user"},"text":"hello","future_field":{"keep":true}}}""");
         var incoming = (MessageEvent)received.Last();
-        Check(((TgMessage)incoming.Raw!).AdditionalData! ["future_field"].GetProperty("keep").GetBoolean(), "Unknown message fields lost.");
+        Check(incoming.Raw is ShiroBot.Model.Telegram.TelegramMessage { MessageId: 1 } native
+              && native.Json.GetProperty("future_field").GetProperty("keep").GetBoolean()
+              && incoming.Segments.OfType<RawSegment>().Any(s => s.Kind == "future_field"), "Unknown message fields lost.");
         Check((await users.GetUserAsync("7"))?.Id == "7" && (await users.GetTelegramUserAsync("7")).LastName == "Last", "Shared TelegramUser fields lost.");
         Check((await users.GetTelegramUserAsync()).IsBot, "Self shared Model missing.");
         Check((await users.GetTelegramMemberAsync("-100", "7")).FirstName == "First", "Member shared Model missing.");

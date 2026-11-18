@@ -5,11 +5,11 @@ using ShiroBot.SDK.Config;
 using ShiroBot.SDK.Core;
 using ShiroBot.SDK.Plugin;
 
-[assembly: RequiresShiroBotPackage("shirobot.model.telegram", MinimumVersion = "0.9.4")]
+[assembly: RequiresShiroBotPackage("shirobot.model.telegram", MinimumVersion = "1.0.4")]
 
 namespace ShiroBot.TelegramAdapter;
 
-[BotAdapter("telegram", Name = "TelegramAdapter", Version = "0.4.0", Author = "ShirokaProject",
+[BotAdapter("telegram", Name = "TelegramAdapter", Version = "0.5.0", Author = "ShirokaProject",
     Description = "Telegram Bot API adapter for ShiroBot", Protocol = "telegram-bot-api")]
 public sealed class TelegramAdapter : IBotAdapter, IConfigurableAdapter, IConfigurableComponent<TelegramAdapterConfig>,
     ILifetimeAwareAdapter
@@ -20,6 +20,7 @@ public sealed class TelegramAdapter : IBotAdapter, IConfigurableAdapter, IConfig
     private TelegramInteractionService? _interactions;
     private TelegramReactionService? _reactions;
     private TelegramBotApi? _botApi;
+    private TelegramModelApi? _model;
     private CancellationTokenSource? _pollingTokenSource;
     private Task? _pollingTask;
     private IMessageService? _message;
@@ -53,7 +54,7 @@ public sealed class TelegramAdapter : IBotAdapter, IConfigurableAdapter, IConfig
         return Task.CompletedTask;
     }
 
-    public TService? GetExtension<TService>() where TService : class => this as TService ?? _client as TService ?? _message as TService ?? _user as TService ?? _interactions as TService ?? _reactions as TService ?? _botApi as TService;
+    public TService? GetExtension<TService>() where TService : class => this as TService ?? _client as TService ?? _message as TService ?? _user as TService ?? _interactions as TService ?? _reactions as TService ?? _model as TService ?? _botApi as TService;
 
     public async Task StartAsync()
     {
@@ -66,8 +67,9 @@ public sealed class TelegramAdapter : IBotAdapter, IConfigurableAdapter, IConfig
         try
         {
             _client = new TelegramClient(config.BotToken, config.ApiBaseUrl);
+            _interactions = new TelegramInteractionService(_client, config.AutoAnswerCallbacks);
             _botApi = new TelegramBotApi(_client);
-            _interactions = new TelegramInteractionService(_client);
+            _model = new TelegramModelApi(_botApi, _client, _mapper, _interactions);
             _reactions = new TelegramReactionService(_client);
             _message = new TelegramMessageService(_client, _mapper, _interactions);
             _channel = new TelegramChannelService(_client, _mapper);
@@ -105,6 +107,8 @@ public sealed class TelegramAdapter : IBotAdapter, IConfigurableAdapter, IConfig
         {
             if (_client is not null) _events.Detach(_client);
             _botApi?.Detach();
+            _model?.Detach();
+            _model = null;
             _botApi = null;
             _pollingTokenSource?.Dispose();
             _client?.Dispose();
@@ -155,4 +159,8 @@ public sealed class TelegramAdapterConfig
     [ConfigField("自建 Telegram Bot API Server 地址；留空使用 https://api.telegram.org。",
         Label = "API Base URL", Group = "connection", Order = 20)]
     public string? ApiBaseUrl { get; set; }
+
+    [ConfigField("收到按钮回调时立即确认。关闭后由插件确认，可显示提示或弹窗；10 秒内未确认时客户端按钮会一直转圈。",
+        Label = "自动确认按钮回调", Group = "behavior", GroupLabel = "行为", Order = 30)]
+    public bool AutoAnswerCallbacks { get; set; } = true;
 }

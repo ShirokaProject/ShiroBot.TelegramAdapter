@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using ShiroBot.SDK.Models;
 using ShiroBot.Telegram.Model;
 using Sdk = ShiroBot.SDK.Models;
@@ -56,19 +57,23 @@ public sealed class TelegramMapper
 
     // ─── 入站消息 ───
 
-    public MessageEvent ToMessageEvent(TgMessage message)
+    /// <param name="typed">同一消息的完整 Bot API 对象；提供时 Raw 为共享 Model 的 TelegramMessage，并映射 Telegram 原生内容段。</param>
+    public MessageEvent ToMessageEvent(TgMessage message, ShiroBot.Telegram.Model.BotApi.Message? typed = null, JsonElement? json = null)
     {
         Chats.Set(message.Chat.Id.ToString(), message.Chat);
         if (message.From is { } from) Users.Set(from.Id.ToString(), from);
+        var segments = ToSegments(message);
+        if (typed is not null) segments = [.. segments, .. TelegramModelConverter.NativeSegments(typed)];
         return new MessageEvent
         {
-            Platform = PlatformId, SelfId = SelfId, Raw = message,
+            Platform = PlatformId, SelfId = SelfId,
+            Raw = typed is null ? message : TelegramModelConverter.Message(typed, json ?? JsonSerializer.SerializeToElement(message)),
             MessageId = message.MessageId.ToString(), Channel = ToChannel(message.Chat, message.MessageThreadId),
             Sender = message.SenderChat is { } senderChat
                 ? new Sdk.User(senderChat.Id.ToString()) { Name = senderChat.Title ?? senderChat.Username }
                 : message.From is { } user ? ToUser(user)
                     : new Sdk.User(message.Chat.Id.ToString()) { Name = message.Chat.Title },
-            Segments = ToSegments(message), Timestamp = DateTimeOffset.FromUnixTimeSeconds(message.Date)
+            Segments = segments, Timestamp = DateTimeOffset.FromUnixTimeSeconds(message.Date)
         };
     }
 
@@ -150,7 +155,8 @@ public sealed class TelegramMapper
 
         if (message.AdditionalData is { } unknown)
             foreach (var (kind, value) in unknown)
-                segments.Add(new RawSegment(PlatformId, kind, value.Clone()));
+                if (!TelegramModelConverter.ModeledMessageFields.Contains(kind))
+                    segments.Add(new RawSegment(PlatformId, kind, value.Clone()));
         return segments;
     }
 

@@ -101,6 +101,7 @@ try { TelegramMapper.ParseChannelId("-100:invalid"); throw new Exception("Invali
 catch (ArgumentException) { }
 await Coverage.RunAsync();
 await BotApiCoverage.RunAsync();
+await ModelCoverage.RunAsync();
 Console.WriteLine("Verified SDK HTTP dispatch, topic/reply/media payloads, capabilities, cancellation, custom API URLs, polling events, identity isolation and configuration.");
 
 sealed class ApiHandler : HttpMessageHandler
