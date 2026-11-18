@@ -120,6 +120,7 @@ public sealed class TelegramAdapter : IBotAdapter, IConfigurableAdapter, IConfig
             _user = null;
             _mapper.SelfId = null;
             _mapper.Users.Clear();
+            _mapper.Usernames.Clear();
             _mapper.Chats.Clear();
             _mapper.Uploads.Clear();
             _interactions = null;

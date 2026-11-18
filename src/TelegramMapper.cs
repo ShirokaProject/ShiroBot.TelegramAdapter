@@ -13,6 +13,27 @@ public sealed class TelegramMapper
 
     internal string? SelfId { get; set; }
     internal BoundedCache<TgUser> Users { get; } = new();
+
+    /// <summary>小写用户名 → 用户 ID，用于把 @username 提及解析为 SDK 使用的数字 ID。</summary>
+    internal BoundedCache<string> Usernames { get; } = new();
+
+    /// <summary>缓存见过的用户，并登记其用户名。</summary>
+    internal void Remember(TgUser user)
+    {
+        var id = user.Id.ToString();
+        Users.Set(id, user);
+        if (!string.IsNullOrEmpty(user.Username)) Usernames.Set(user.Username.ToLowerInvariant(), id);
+    }
+
+    /// <summary>
+    ///     Telegram 的 @username 提及只带用户名；已知用户（包括机器人自己）解析为数字 ID，
+    ///     插件才能用 <c>HasMention(SelfId)</c> 判断是否被提及。
+    /// </summary>
+    internal IReadOnlyList<MessageSegment> ResolveMentions(IReadOnlyList<MessageSegment> segments) =>
+        segments.Select(segment => segment is MentionSegment mention && !long.TryParse(mention.UserId, out _)
+                                   && Usernames.TryGet(mention.UserId.TrimStart('@').ToLowerInvariant(), out var id)
+            ? mention with { UserId = id }
+            : segment).ToArray();
     internal BoundedCache<TgChat> Chats { get; } = new();
     internal BoundedCache<(string ChannelId, string FileId)> Uploads { get; } = new();
     public static ShiroBot.Model.Telegram.TelegramUser ToPlatformUser(TgUser user) => new()
@@ -61,8 +82,8 @@ public sealed class TelegramMapper
     public MessageEvent ToMessageEvent(TgMessage message, ShiroBot.Telegram.Model.BotApi.Message? typed = null, JsonElement? json = null)
     {
         Chats.Set(message.Chat.Id.ToString(), message.Chat);
-        if (message.From is { } from) Users.Set(from.Id.ToString(), from);
-        var segments = ToSegments(message);
+        if (message.From is { } from) Remember(from);
+        var segments = ResolveMentions(ToSegments(message));
         if (typed is not null) segments = [.. segments, .. TelegramModelConverter.NativeSegments(typed)];
         return new MessageEvent
         {
@@ -185,7 +206,7 @@ public sealed class TelegramMapper
             var mentionText = text.Substring(mention.Offset, mention.Length);
             yield return mention.User is { } user
                 ? new MentionSegment(user.Id.ToString()) { DisplayName = user.DisplayName }
-                : new MentionSegment(mentionText.TrimStart('@')) { DisplayName = mentionText };
+                : new MentionSegment(mentionText.TrimStart('@')) { DisplayName = mentionText.TrimStart('@') };
 
             position = mention.Offset + mention.Length;
         }

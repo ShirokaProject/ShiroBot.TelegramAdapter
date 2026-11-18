@@ -22,7 +22,7 @@ public sealed class TelegramChannelService(TelegramClient client, TelegramMapper
             chat_id = chatId,
             user_id = TelegramMapper.ParseId(userId, "userId")
         }, cancellationToken: cancellationToken);
-        mapper?.Users.Set(member.User.Id.ToString(), member.User);
+        mapper?.Remember(member.User);
         return TelegramMapper.ToMember(member);
     }
 

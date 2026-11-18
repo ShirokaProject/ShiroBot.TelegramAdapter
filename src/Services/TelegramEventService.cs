@@ -90,13 +90,13 @@ public sealed class TelegramEventService(TelegramMapper mapper, Func<TelegramInt
                 UpdateId = updateId, Time = Time(editedTyped.EditDate ?? editedTyped.Date), Json = editedJson,
                 Channel = channel, MessageId = edited.MessageId.ToString(), IsChannelPost = isChannel,
                 Message = TelegramModelConverter.Message(editedTyped, editedJson),
-                Segments = [.. TelegramMapper.ToSegments(edited), .. NativeSegments(editedTyped)]
+                Segments = [.. mapper.ResolveMentions(TelegramMapper.ToSegments(edited)), .. NativeSegments(editedTyped)]
             }, channel);
         }
 
         if (update.CallbackQuery is { } callback)
         {
-            mapper.Users.Set(callback.From.Id.ToString(), callback.From);
+            mapper.Remember(callback.From);
             var decoded = callback.Data is null ? ((string?)null, (string?)null) : ButtonCodec.Decode(callback.Data);
             var automatic = interactions?.AutoAnswer == true;
             yield return new InteractionEvent
@@ -111,7 +111,7 @@ public sealed class TelegramEventService(TelegramMapper mapper, Func<TelegramInt
         }
         if (update.MessageReaction is { } reaction)
         {
-            if (reaction.User is { } reactor) mapper.Users.Set(reactor.Id.ToString(), reactor);
+            if (reaction.User is { } reactor) mapper.Remember(reactor);
             if (reaction.OldReaction.Concat(reaction.NewReaction).Any(e => e.Type is not ("emoji" or "custom_emoji")))
                 yield return Platform("message_reaction", reaction, TelegramMapper.ToChannel(reaction.Chat));
             foreach (var (items, other, added) in new[]
@@ -150,7 +150,7 @@ public sealed class TelegramEventService(TelegramMapper mapper, Func<TelegramInt
         }
         if (typed.ChatJoinRequest is { } join)
         {
-            mapper.Users.Set(join.From.Id.ToString(), update.ChatJoinRequest!.From);
+            mapper.Remember(update.ChatJoinRequest!.From);
             yield return Platform(TelegramEventKinds.ChatJoinRequest, new TelegramChatJoinRequest
             {
                 UpdateId = updateId, Time = Time(join.Date), Json = Field(json, "chat_join_request"),

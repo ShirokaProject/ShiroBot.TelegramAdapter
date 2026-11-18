@@ -9,7 +9,7 @@ public sealed class TelegramUserService(TelegramClient client, TelegramMapper? m
     public async Task<Sdk.User> GetSelfAsync(CancellationToken cancellationToken = default)
     {
         var me = await client.CallAsync<TgUser>("getMe", cancellationToken: cancellationToken);
-        mapper?.Users.Set(me.Id.ToString(), me);
+        mapper?.Remember(me);
         return TelegramMapper.ToUser(me);
     }
     public Task<Sdk.User?> GetUserAsync(string userId, CancellationToken cancellationToken = default)
@@ -30,7 +30,7 @@ public sealed class TelegramUserService(TelegramClient client, TelegramMapper? m
         if (userId is null)
         {
             var self = await client.CallAsync<TgUser>("getMe", cancellationToken: cancellationToken);
-            mapper?.Users.Set(self.Id.ToString(), self);
+            mapper?.Remember(self);
             return TelegramMapper.ToPlatformUser(self);
         }
         if (mapper is not null && mapper.Users.TryGet(userId, out var known)) return TelegramMapper.ToPlatformUser(known);
@@ -41,7 +41,7 @@ public sealed class TelegramUserService(TelegramClient client, TelegramMapper? m
         var (chatId, _) = TelegramMapper.ParseChannelId(channelId);
         var member = await client.CallAsync<TgChatMember>("getChatMember", new { chat_id = chatId,
             user_id = TelegramMapper.ParseId(userId, "userId") }, cancellationToken);
-        mapper?.Users.Set(userId, member.User);
+        mapper?.Remember(member.User);
         return TelegramMapper.ToPlatformUser(member.User);
     }
 }
