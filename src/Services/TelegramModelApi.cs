@@ -9,7 +9,8 @@ namespace ShiroBot.TelegramAdapter.Services;
 
 /// <summary>宿主共享 Telegram Model 扩展接口的实现，插件无需引用本适配器程序集。</summary>
 public sealed class TelegramModelApi(TelegramClient client, TelegramMapper mapper, TelegramInteractionService? interactions = null)
-    : ITelegramChatApi, ITelegramMessageApi, ITelegramInlineApi, ITelegramPaymentApi, ITelegramBotProfileApi, ITelegramRawApi
+    : ITelegramClientApi, ITelegramChatApi, ITelegramMessageApi, ITelegramInlineApi, ITelegramPaymentApi, ITelegramBotProfileApi,
+        ITelegramBotApi
 {
     private static long User(string userId) => TelegramMapper.ParseId(userId, "userId");
     private static long Message(string messageId) => TelegramMapper.ParseId(messageId, "messageId");
@@ -459,13 +460,23 @@ public sealed class TelegramModelApi(TelegramClient client, TelegramMapper mappe
     public async Task<long> GetStarBalanceAsync(CancellationToken cancellationToken = default) =>
         Long(await Call("getMyStarBalance", new JsonObject(), cancellationToken), "amount") ?? 0;
 
-    // ─── ITelegramBotProfileApi ───
+    // ─── ITelegramClientApi ───
+
+    public TelegramAccountKind AccountKind => TelegramAccountKind.Bot;
+
+    public TelegramTransport Transport => TelegramTransport.BotApi;
+
+    public long MaxUploadBytes => client.MaxUploadBytes;
+
+    public long MaxDownloadBytes => client.MaxDownloadBytes;
 
     public async Task<TelegramUser> GetMeAsync(CancellationToken cancellationToken = default) =>
         TelegramModelConverter.User(await Call("getMe", new JsonObject(), cancellationToken));
 
     public TelegramUser? FindKnownUser(string userId) =>
         mapper.Users.TryGet(userId, out var user) ? TelegramMapper.ToPlatformUser(user) : null;
+
+    // ─── ITelegramBotProfileApi ───
 
     public Task SetCommandsAsync(IReadOnlyList<TelegramBotCommand> commands, TelegramCommandScope? scope = null, string? languageCode = null,
         CancellationToken cancellationToken = default) =>
@@ -496,7 +507,7 @@ public sealed class TelegramModelApi(TelegramClient client, TelegramMapper mappe
         Call("setMyShortDescription", new JsonObject { ["short_description"] = description, ["language_code"] = languageCode },
             cancellationToken);
 
-    // ─── ITelegramRawApi ───
+    // ─── ITelegramBotApi ───
 
     public string BotApiVersion => "10.4";
 

@@ -25,8 +25,8 @@ internal static class ModelCoverage
 
     public static async Task RunAsync()
     {
-        foreach (var contract in new[] { typeof(ITelegramChatApi), typeof(ITelegramMessageApi), typeof(ITelegramInlineApi),
-                     typeof(ITelegramPaymentApi), typeof(ITelegramBotProfileApi), typeof(ITelegramRawApi) })
+        foreach (var contract in new[] { typeof(ITelegramClientApi), typeof(ITelegramChatApi), typeof(ITelegramMessageApi),
+                     typeof(ITelegramInlineApi), typeof(ITelegramPaymentApi), typeof(ITelegramBotProfileApi), typeof(ITelegramBotApi) })
             Check(typeof(TelegramModelApi).GetInterfaceMap(contract).TargetMethods.All(m => m.DeclaringType == typeof(TelegramModelApi)),
                 $"TelegramModelApi inherits an unimplemented default member of {contract.Name}.");
 
@@ -36,6 +36,17 @@ internal static class ModelCoverage
         var interactions = new TelegramInteractionService(client, autoAnswer: false);
         var model = new TelegramModelApi(client, mapper, interactions);
         var group = new Channel("-100:42", ChannelType.Thread);
+
+        // 账号信息与会话 ID 规则（机器人与用户账号适配器通用）。
+        Check(model is { AccountKind: TelegramAccountKind.Bot, Transport: TelegramTransport.BotApi, MaxUploadBytes: 50L * 1024 * 1024,
+              MaxDownloadBytes: 20L * 1024 * 1024 }, "Client info is wrong.");
+        using (var local = new TelegramClient("test-token", "http://127.0.0.1:8081", http))
+            Check(new TelegramModelApi(local, mapper) is { MaxUploadBytes: 2000L * 1024 * 1024, MaxDownloadBytes: 2000L * 1024 * 1024 },
+                "Local Bot API Server limits are wrong.");
+        Check(TelegramChatIds.ToChatId(TelegramPeerKind.Channel, 4332876562) == -1004332876562
+              && TelegramChatIds.ToPeer(-1004332876562) == (TelegramPeerKind.Channel, 4332876562)
+              && TelegramChatIds.ToPeer(-12345) == (TelegramPeerKind.BasicGroup, 12345)
+              && TelegramChatIds.ToPeer(777) == (TelegramPeerKind.User, 777), "Chat ID conversion is wrong.");
 
         // 原生内容：投票、键盘、引用。
         var sent = await model.SendAsync(group, new TelegramPollContent("Q?", ["a", "b"])

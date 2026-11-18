@@ -79,12 +79,13 @@ SDK 映射层只覆盖 SDK 1.0.4 合约；Telegram 特有能力由共享 Model �
 
 | 接口 / 契约 | 实现 |
 | --- | --- |
+| ITelegramClientApi | AccountKind = Bot、Transport = BotApi；上传上限 50 MB / 下载上限 20 MB（自建 Bot API Server 均为 2000 MB）；getMe、已见用户缓存 |
 | ITelegramChatApi | getChat、getChatMemberCount、getChatMember、getChatAdministrators、ban/unban/restrict/promoteChatMember、setChatAdministratorCustomTitle、setChatPermissions、setChatTitle/Description/Photo、deleteChatPhoto、pin/unpin/unpinAll（话题用 unpinAllForumTopicMessages）、export/create/edit/revokeChatInviteLink、approve/declineChatJoinRequest、leaveChat、create/edit/close/reopen/deleteForumTopic |
 | ITelegramMessageApi | sendMessage/Poll/Location/Venue/Contact/Dice/Sticker/Invoice/MediaGroup（本地内容以 attach:// 上传）、editMessageText/Caption/ReplyMarkup（含 inline 消息）、forward/copyMessage、deleteMessages、sendChatAction、stopPoll、带提示的 answerCallbackQuery |
 | ITelegramInlineApi | answerInlineQuery：文章、图片（地址或 file_id）、贴纸 |
 | ITelegramPaymentApi | answerPreCheckoutQuery、answerShippingQuery、refundStarPayment、getMyStarBalance |
-| ITelegramBotProfileApi | getMe、已见用户缓存、set/get/deleteMyCommands（全部范围）、setMyName/Description/ShortDescription |
-| ITelegramRawApi | 任意方法 + multipart 上传，原始 Update 事件 |
+| ITelegramBotProfileApi | set/get/deleteMyCommands（全部范围）、setMyName/Description/ShortDescription |
+| ITelegramBotApi | 任意方法 + multipart 上传，原始 Update 事件 |
 | MessageEvent.Raw | `TelegramMessage`：发送者会话、编辑时间、相册 ID、转发来源、话题、inline 机器人、签名、企业连接、原始 JSON |
 | RawSegment | venue（同时带 location 时只报地点）、location、contact、dice、poll、successful_payment、formatted_text；其他未建模字段保持 `JsonElement` |
 | PlatformEvent | message_edited、chat_member_updated、my_chat_member_updated、chat_join_request、inline_query、chosen_inline_result、poll、poll_answer、pre_checkout_query、shipping_query、chat_boost、removed_chat_boost 使用 Model 负载；其他 Update 为 `JsonElement` |
@@ -93,7 +94,7 @@ SDK 映射层只覆盖 SDK 1.0.4 合约；Telegram 特有能力由共享 Model �
 
 ## Telegram Bot API 10.4
 
-共享 Model 没有单独封装的方法通过 `ITelegramRawApi.CallAsync` 调用，参数为 JSON，支持 multipart 上传与 `attach://` 引用；
+共享 Model 没有单独封装的方法通过 `ITelegramBotApi.CallAsync` 调用，参数为 JSON，支持 multipart 上传与 `attach://` 引用；
 `UpdateReceived` 提供全部 Update 的原始 JSON。长轮询订阅 Bot API 10.4 的全部 29 种 Update。
 失败抛出 `TelegramApiException`（适配器内部类型），消息包含错误码与说明，并解析 `retry_after` 与 `migrate_to_chat_id`。
 

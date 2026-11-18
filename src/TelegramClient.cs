@@ -52,6 +52,11 @@ public sealed class TelegramClient : IDisposable
         ? ResourceReader.OfficialMaxBytes
         : ResourceReader.LocalServerMaxBytes;
 
+    /// <summary>getFile 的下载上限：官方服务器 20 MB，自建 Bot API Server 2000 MB。</summary>
+    internal long MaxDownloadBytes => MaxUploadBytes == ResourceReader.OfficialMaxBytes
+        ? 20L * 1024 * 1024
+        : ResourceReader.LocalServerMaxBytes;
+
     /// <summary>下载资源使用的客户端，与 Bot API 使用同一代理。</summary>
     internal HttpClient Downloads => _downloads;
 

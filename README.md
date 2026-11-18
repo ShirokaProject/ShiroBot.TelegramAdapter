@@ -39,12 +39,13 @@ Windows 命令行使用 `powershell -ExecutionPolicy Bypass -File scripts/dev.ps
 
 | 接口 | 内容 |
 | --- | --- |
+| `ITelegramClientApi` | 账号类型（机器人）、传输方式（Bot API）、上传与下载上限、自身资料、已见用户 |
 | `ITelegramChatApi` | 会话资料、成员与管理员、封禁/限制/提升、默认权限、标题/简介/头像、置顶、邀请链接、入群审批、话题 |
 | `ITelegramMessageApi` | 投票、位置、地点、联系人、骰子、贴纸、相册、发票；内联键盘、自定义键盘、强制回复；编辑、转发、复制、批量删除、输入状态、结束投票、带提示回答回调 |
 | `ITelegramInlineApi` | 回答 inline 查询 |
 | `ITelegramPaymentApi` | 付款确认、收货方式、Stars 退款与余额 |
-| `ITelegramBotProfileApi` | 自身资料、已见用户、命令菜单、名称与介绍 |
-| `ITelegramRawApi` | 任意 Bot API 方法、文件上传和原始 Update，只使用 System.Text.Json 类型 |
+| `ITelegramBotProfileApi` | 命令菜单、名称与介绍 |
+| `ITelegramBotApi` | 任意 Bot API 方法、文件上传和原始 Update，只使用 System.Text.Json 类型 |
 
 入站消息的 `MessageEvent.Raw` 为 `TelegramMessage`（相册 ID、转发来源、话题、原始 JSON）；位置、地点、联系人、
 骰子、投票、付款和格式实体以 `RawSegment` 上报，`Payload` 为对应 Model 记录。消息编辑、成员与机器人状态、
@@ -63,14 +64,14 @@ await telegram.SendAsync(message.Channel, new TelegramPollContent("午饭？", [
 
 ## 全部 Bot API
 
-共享 Model 没有单独封装的方法，通过 `ITelegramRawApi` 直接调用，参数使用 Bot API 的 snake_case 名称，
+共享 Model 没有单独封装的方法，通过 `ITelegramBotApi` 直接调用，参数使用 Bot API 的 snake_case 名称，
 只依赖 System.Text.Json，插件同样不需要引用本适配器：
 
 ```csharp
 using System.Text.Json.Nodes;
 using ShiroBot.Model.Telegram;
 
-var raw = Context.GetAdapterExtension<ITelegramRawApi>()!;
+var raw = Context.GetAdapterExtension<ITelegramBotApi>()!;
 var result = await raw.CallAsync("setChatMenuButton", new JsonObject
 {
     ["menu_button"] = new JsonObject { ["type"] = "commands" }
