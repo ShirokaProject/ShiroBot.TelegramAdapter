@@ -42,6 +42,36 @@ internal static class ClientCoverage
                 "sendMessage sent explicit nulls: " + string.Join(", ", nulls));
         }
 
+        // 错误参数保留限流等待时间与迁移后的 chat_id。
+        using (var client = new TelegramClient(token, handler: new ErrorHandler()))
+        {
+            try
+            {
+                await client.InvokeAsync("sendMessage", new System.Text.Json.Nodes.JsonObject { ["chat_id"] = 1, ["text"] = "x" });
+                throw new Exception("Bot API error ignored.");
+            }
+            catch (TelegramApiException error)
+            {
+                Check(error.ErrorCode == 429 && error.RetryAfter == TimeSpan.FromSeconds(3) && error.MigrateToChatId == -1001,
+                    "Bot API error parameters lost.");
+            }
+        }
+
+        // 长轮询订阅全部 Update 种类，原始 Update 先于 SDK 事件触发。
+        var polling = new UriRecorder();
+        using (var client = new TelegramClient(token, handler: polling))
+        {
+            using var stop = new CancellationTokenSource();
+            string? raw = null;
+            client.RawUpdateReceived += update => { raw = update.GetRawText(); stop.Cancel(); return Task.CompletedTask; };
+            try { await client.RunLongPollingAsync(stop.Token); }
+            catch (OperationCanceledException) { }
+            using var request = System.Text.Json.JsonDocument.Parse(polling.Body!);
+            var allowed = request.RootElement.GetProperty("allowed_updates").EnumerateArray().Select(u => u.GetString()).ToArray();
+            Check(allowed.Length == TelegramClient.UpdateTypes.Count && allowed.Contains("widget_query") && allowed.Contains("business_message")
+                  && raw?.Contains("\"update_id\":9") == true, "Polling does not subscribe to every update kind.");
+        }
+
         var proxy = TelegramClient.CreateProxy("socks5://user:p%40ss@127.0.0.1:7891")!;
         var credentials = (NetworkCredential)proxy.Credentials!;
         Check(proxy.Address!.AbsoluteUri == "socks5://127.0.0.1:7891/" && credentials.UserName == "user" && credentials.Password == "p@ss",
@@ -58,6 +88,16 @@ internal static class ClientCoverage
         Console.WriteLine("Telegram client: real token URLs, custom API root and proxy settings verified.");
     }
 
+    private sealed class ErrorHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.TooManyRequests)
+            {
+                Content = new StringContent("""{"ok":false,"error_code":429,"description":"Too Many Requests","parameters":{"retry_after":3,"migrate_to_chat_id":-1001}}""",
+                    Encoding.UTF8, "application/json")
+            });
+    }
+
     private sealed class UriRecorder : HttpMessageHandler
     {
         public Uri? Last { get; private set; }
@@ -67,9 +107,12 @@ internal static class ClientCoverage
         {
             Last = request.RequestUri;
             Body = request.Content is null ? null : await request.Content.ReadAsStringAsync(token);
-            var result = request.RequestUri!.AbsolutePath.EndsWith("/sendMessage")
+            var path = request.RequestUri!.AbsolutePath;
+            var result = path.EndsWith("/sendMessage")
                 ? """{"message_id":1,"date":1,"chat":{"id":-1004332876562,"type":"supergroup"}}"""
-                : """{"id":1,"is_bot":true,"first_name":"Bot"}""";
+                : path.EndsWith("/getUpdates")
+                    ? """[{"update_id":9,"message":{"message_id":1,"date":1,"chat":{"id":1,"type":"private"},"text":"hi"}}]"""
+                    : """{"id":1,"is_bot":true,"first_name":"Bot"}""";
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent("{\"ok\":true,\"result\":" + result + "}", Encoding.UTF8, "application/json")

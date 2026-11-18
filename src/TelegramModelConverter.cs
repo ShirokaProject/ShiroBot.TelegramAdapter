@@ -1,30 +1,51 @@
 using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using ShiroBot.Model.Telegram;
 using ShiroBot.SDK.Models;
-using Api = ShiroBot.Telegram.Model.BotApi;
 
 namespace ShiroBot.TelegramAdapter;
 
-/// <summary>Bot API 类型与宿主共享的 <c>ShiroBot.Model.Telegram</c> 契约之间的转换。</summary>
+/// <summary>Bot API JSON 与宿主共享的 <c>ShiroBot.Model.Telegram</c> 契约之间的转换。</summary>
 internal static class TelegramModelConverter
 {
+    // ─── JSON 读取 ───
+
+    public static bool Has(JsonElement e, string name, out JsonElement value)
+    {
+        value = default;
+        return e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out value) && value.ValueKind != JsonValueKind.Null;
+    }
+
+    public static JsonElement Prop(JsonElement e, string name) => Has(e, name, out var value) ? value : default;
+
+    public static string? Str(JsonElement e, string name) =>
+        Has(e, name, out var v) ? v.ValueKind == JsonValueKind.String ? v.GetString() : v.ToString() : null;
+
+    public static long? Long(JsonElement e, string name) => Has(e, name, out var v) && v.TryGetInt64(out var n) ? n : null;
+    public static int Int(JsonElement e, string name) => Has(e, name, out var v) && v.TryGetInt32(out var n) ? n : 0;
+    public static double? Double(JsonElement e, string name) => Has(e, name, out var v) && v.TryGetDouble(out var n) ? n : null;
+    public static bool Bool(JsonElement e, string name) => Has(e, name, out var v) && v.ValueKind == JsonValueKind.True;
+
+    public static IEnumerable<JsonElement> Items(JsonElement e, string name) =>
+        Has(e, name, out var v) && v.ValueKind == JsonValueKind.Array ? v.EnumerateArray() : [];
+
     public static DateTimeOffset Time(long unixSeconds) => DateTimeOffset.FromUnixTimeSeconds(unixSeconds);
 
-    private static DateTimeOffset? OptionalTime(long? unixSeconds) =>
-        unixSeconds is > 0 ? Time(unixSeconds.Value) : null;
+    private static DateTimeOffset? OptionalTime(JsonElement e, string name) => Long(e, name) is { } t and > 0 ? Time(t) : null;
 
     public static long? UnixTime(DateTimeOffset? value) => value?.ToUnixTimeSeconds();
 
     // ─── 入站 ───
 
-    public static TelegramUser User(Api.User user) => new()
+    public static TelegramUser User(JsonElement user) => new()
     {
-        UserId = user.Id, FirstName = user.FirstName, LastName = user.LastName, Username = user.Username,
-        IsBot = user.IsBot, LanguageCode = user.LanguageCode, IsPremium = user.IsPremium == true
+        UserId = Long(user, "id") ?? 0, FirstName = Str(user, "first_name") ?? string.Empty, LastName = Str(user, "last_name"),
+        Username = Str(user, "username"), IsBot = Bool(user, "is_bot"), LanguageCode = Str(user, "language_code"),
+        IsPremium = Bool(user, "is_premium")
     };
 
-    public static TelegramChatType ChatType(string type) => type switch
+    public static TelegramChatType ChatType(string? type) => type switch
     {
         "private" => TelegramChatType.Private,
         "group" => TelegramChatType.Group,
@@ -33,197 +54,163 @@ internal static class TelegramModelConverter
         _ => throw new NotSupportedException("未知的 Telegram 会话类型：" + type)
     };
 
-    public static TelegramChat Chat(Api.Chat chat) => new()
+    /// <summary>Chat 或 ChatFullInfo；后者额外填充资料字段。</summary>
+    public static TelegramChat Chat(JsonElement chat) => new()
     {
-        ChatId = chat.Id, Type = ChatType(chat.Type), Title = chat.Title, Username = chat.Username,
-        FirstName = chat.FirstName, LastName = chat.LastName, IsForum = chat.IsForum == true,
-        IsDirectMessages = chat.IsDirectMessages == true
-    };
-
-    public static TelegramChat Chat(Api.ChatFullInfo chat) => new()
-    {
-        ChatId = chat.Id, Type = ChatType(chat.Type), Title = chat.Title, Username = chat.Username,
-        FirstName = chat.FirstName, LastName = chat.LastName, IsForum = chat.IsForum == true,
-        IsDirectMessages = chat.IsDirectMessages == true, Description = chat.Description, Bio = chat.Bio,
-        InviteLink = chat.InviteLink, Permissions = chat.Permissions is { } permissions ? Permissions(permissions) : null,
-        SlowModeDelay = chat.SlowModeDelay is { } delay ? TimeSpan.FromSeconds(delay) : null,
-        LinkedChatId = chat.LinkedChatId
+        ChatId = Long(chat, "id") ?? 0, Type = ChatType(Str(chat, "type")), Title = Str(chat, "title"), Username = Str(chat, "username"),
+        FirstName = Str(chat, "first_name"), LastName = Str(chat, "last_name"), IsForum = Bool(chat, "is_forum"),
+        IsDirectMessages = Bool(chat, "is_direct_messages"), Description = Str(chat, "description"), Bio = Str(chat, "bio"),
+        InviteLink = Str(chat, "invite_link"),
+        Permissions = Has(chat, "permissions", out var permissions) ? Permissions(permissions) : null,
+        SlowModeDelay = Long(chat, "slow_mode_delay") is { } delay ? TimeSpan.FromSeconds(delay) : null,
+        LinkedChatId = Long(chat, "linked_chat_id")
     };
 
     /// <summary>Bot API 会话对应的 SDK 频道，话题使用 <c>chatId:threadId</c>。</summary>
-    public static Channel Channel(Api.Chat chat, long? threadId)
+    public static Channel Channel(JsonElement chat, long? threadId)
     {
-        var id = chat.Id.ToString(CultureInfo.InvariantCulture);
-        if (chat.Type == "private") return SDK.Models.Channel.Direct(id);
+        var id = (Long(chat, "id") ?? 0).ToString(CultureInfo.InvariantCulture);
+        if (Str(chat, "type") == "private") return SDK.Models.Channel.Direct(id);
+        var title = Str(chat, "title");
         return threadId is { } thread
-            ? new Channel($"{id}:{thread.ToString(CultureInfo.InvariantCulture)}", ChannelType.Thread) { Name = chat.Title, GuildId = id }
-            : new Channel(id, ChannelType.Group) { Name = chat.Title ?? chat.Username, GuildId = id };
+            ? new Channel($"{id}:{thread.ToString(CultureInfo.InvariantCulture)}", ChannelType.Thread) { Name = title, GuildId = id }
+            : new Channel(id, ChannelType.Group) { Name = title ?? Str(chat, "username"), GuildId = id };
     }
 
-    public static Channel Channel(Api.Message message) =>
-        Channel(message.Chat, message.IsTopicMessage == true ? message.MessageThreadId : null);
+    private static long? ThreadId(JsonElement message) => Bool(message, "is_topic_message") ? Long(message, "message_thread_id") : null;
 
-    public static TelegramChatPermissions Permissions(Api.ChatPermissions value) => new()
+    public static Channel MessageChannel(JsonElement message) => Channel(Prop(message, "chat"), ThreadId(message));
+
+    private static readonly string[] PermissionFields =
+    [
+        "can_send_messages", "can_send_audios", "can_send_documents", "can_send_photos", "can_send_videos", "can_send_video_notes",
+        "can_send_voice_notes", "can_send_polls", "can_send_other_messages", "can_add_web_page_previews", "can_react_to_messages",
+        "can_change_info", "can_invite_users", "can_pin_messages", "can_manage_topics"
+    ];
+
+    private static bool? OptionalBool(JsonElement e, string name) =>
+        Has(e, name, out var v) && v.ValueKind is JsonValueKind.True or JsonValueKind.False ? v.GetBoolean() : null;
+
+    /// <summary>ChatPermissions 或 ChatMemberRestricted（字段名相同）。</summary>
+    public static TelegramChatPermissions Permissions(JsonElement value) => new()
     {
-        CanSendMessages = value.CanSendMessages, CanSendAudios = value.CanSendAudios,
-        CanSendDocuments = value.CanSendDocuments, CanSendPhotos = value.CanSendPhotos,
-        CanSendVideos = value.CanSendVideos, CanSendVideoNotes = value.CanSendVideoNotes,
-        CanSendVoiceNotes = value.CanSendVoiceNotes, CanSendPolls = value.CanSendPolls,
-        CanSendOtherMessages = value.CanSendOtherMessages, CanAddWebPagePreviews = value.CanAddWebPagePreviews,
-        CanReactToMessages = value.CanReactToMessages, CanChangeInfo = value.CanChangeInfo,
-        CanInviteUsers = value.CanInviteUsers, CanPinMessages = value.CanPinMessages,
-        CanManageTopics = value.CanManageTopics
+        CanSendMessages = OptionalBool(value, "can_send_messages"), CanSendAudios = OptionalBool(value, "can_send_audios"),
+        CanSendDocuments = OptionalBool(value, "can_send_documents"), CanSendPhotos = OptionalBool(value, "can_send_photos"),
+        CanSendVideos = OptionalBool(value, "can_send_videos"), CanSendVideoNotes = OptionalBool(value, "can_send_video_notes"),
+        CanSendVoiceNotes = OptionalBool(value, "can_send_voice_notes"), CanSendPolls = OptionalBool(value, "can_send_polls"),
+        CanSendOtherMessages = OptionalBool(value, "can_send_other_messages"),
+        CanAddWebPagePreviews = OptionalBool(value, "can_add_web_page_previews"),
+        CanReactToMessages = OptionalBool(value, "can_react_to_messages"), CanChangeInfo = OptionalBool(value, "can_change_info"),
+        CanInviteUsers = OptionalBool(value, "can_invite_users"), CanPinMessages = OptionalBool(value, "can_pin_messages"),
+        CanManageTopics = OptionalBool(value, "can_manage_topics")
     };
 
-    public static TelegramChatMember Member(Api.ChatMember member) => member switch
+    public static TelegramChatMember Member(JsonElement member)
     {
-        Api.ChatMemberOwner owner => new TelegramChatMember
+        var user = User(Prop(member, "user"));
+        return Str(member, "status") switch
         {
-            User = User(owner.User), Status = TelegramMemberStatus.Owner, CustomTitle = owner.CustomTitle,
-            IsAnonymous = owner.IsAnonymous, IsMember = true
-        },
-        Api.ChatMemberAdministrator admin => new TelegramChatMember
-        {
-            User = User(admin.User), Status = TelegramMemberStatus.Administrator, CustomTitle = admin.CustomTitle,
-            IsAnonymous = admin.IsAnonymous, IsMember = true, CanBeEdited = admin.CanBeEdited,
-            AdminRights = new TelegramAdminRights
+            "creator" => new TelegramChatMember
             {
-                IsAnonymous = admin.IsAnonymous, CanManageChat = admin.CanManageChat,
-                CanDeleteMessages = admin.CanDeleteMessages, CanManageVideoChats = admin.CanManageVideoChats,
-                CanRestrictMembers = admin.CanRestrictMembers, CanPromoteMembers = admin.CanPromoteMembers,
-                CanChangeInfo = admin.CanChangeInfo, CanInviteUsers = admin.CanInviteUsers,
-                CanPostStories = admin.CanPostStories, CanEditStories = admin.CanEditStories,
-                CanDeleteStories = admin.CanDeleteStories, CanPostMessages = admin.CanPostMessages == true,
-                CanEditMessages = admin.CanEditMessages == true, CanPinMessages = admin.CanPinMessages == true,
-                CanManageTopics = admin.CanManageTopics == true,
-                CanManageDirectMessages = admin.CanManageDirectMessages == true
-            }
-        },
-        Api.ChatMemberRestricted restricted => new TelegramChatMember
-        {
-            User = User(restricted.User), Status = TelegramMemberStatus.Restricted, IsMember = restricted.IsMember,
-            UntilDate = OptionalTime(restricted.UntilDate),
-            Permissions = new TelegramChatPermissions
+                User = user, Status = TelegramMemberStatus.Owner, CustomTitle = Str(member, "custom_title"),
+                IsAnonymous = Bool(member, "is_anonymous"), IsMember = true
+            },
+            "administrator" => new TelegramChatMember
             {
-                CanSendMessages = restricted.CanSendMessages, CanSendAudios = restricted.CanSendAudios,
-                CanSendDocuments = restricted.CanSendDocuments, CanSendPhotos = restricted.CanSendPhotos,
-                CanSendVideos = restricted.CanSendVideos, CanSendVideoNotes = restricted.CanSendVideoNotes,
-                CanSendVoiceNotes = restricted.CanSendVoiceNotes, CanSendPolls = restricted.CanSendPolls,
-                CanSendOtherMessages = restricted.CanSendOtherMessages,
-                CanAddWebPagePreviews = restricted.CanAddWebPagePreviews,
-                CanReactToMessages = restricted.CanReactToMessages, CanChangeInfo = restricted.CanChangeInfo,
-                CanInviteUsers = restricted.CanInviteUsers, CanPinMessages = restricted.CanPinMessages,
-                CanManageTopics = restricted.CanManageTopics
-            }
-        },
-        Api.ChatMemberBanned banned => new TelegramChatMember
+                User = user, Status = TelegramMemberStatus.Administrator, CustomTitle = Str(member, "custom_title"),
+                IsAnonymous = Bool(member, "is_anonymous"), IsMember = true, CanBeEdited = Bool(member, "can_be_edited"),
+                AdminRights = new TelegramAdminRights
+                {
+                    IsAnonymous = Bool(member, "is_anonymous"), CanManageChat = Bool(member, "can_manage_chat"),
+                    CanDeleteMessages = Bool(member, "can_delete_messages"), CanManageVideoChats = Bool(member, "can_manage_video_chats"),
+                    CanRestrictMembers = Bool(member, "can_restrict_members"), CanPromoteMembers = Bool(member, "can_promote_members"),
+                    CanChangeInfo = Bool(member, "can_change_info"), CanInviteUsers = Bool(member, "can_invite_users"),
+                    CanPostStories = Bool(member, "can_post_stories"), CanEditStories = Bool(member, "can_edit_stories"),
+                    CanDeleteStories = Bool(member, "can_delete_stories"), CanPostMessages = Bool(member, "can_post_messages"),
+                    CanEditMessages = Bool(member, "can_edit_messages"), CanPinMessages = Bool(member, "can_pin_messages"),
+                    CanManageTopics = Bool(member, "can_manage_topics"),
+                    CanManageDirectMessages = Bool(member, "can_manage_direct_messages")
+                }
+            },
+            "restricted" => new TelegramChatMember
+            {
+                User = user, Status = TelegramMemberStatus.Restricted, IsMember = Bool(member, "is_member"),
+                UntilDate = OptionalTime(member, "until_date"), Permissions = Permissions(member)
+            },
+            "kicked" => new TelegramChatMember
+                { User = user, Status = TelegramMemberStatus.Banned, UntilDate = OptionalTime(member, "until_date") },
+            "left" => new TelegramChatMember { User = user, Status = TelegramMemberStatus.Left },
+            _ => new TelegramChatMember { User = user, Status = TelegramMemberStatus.Member, IsMember = true }
+        };
+    }
+
+    public static TelegramInviteLink InviteLink(JsonElement link) => new()
+    {
+        Link = Str(link, "invite_link") ?? string.Empty, Name = Str(link, "name"),
+        Creator = Has(link, "creator", out var creator) ? User(creator) : null,
+        CreatesJoinRequest = Bool(link, "creates_join_request"), IsPrimary = Bool(link, "is_primary"), IsRevoked = Bool(link, "is_revoked"),
+        ExpireDate = OptionalTime(link, "expire_date"), MemberLimit = (int?)Long(link, "member_limit"),
+        PendingJoinRequestCount = (int?)Long(link, "pending_join_request_count")
+    };
+
+    public static TelegramForumTopic Topic(JsonElement topic) => new()
+    {
+        ThreadId = Long(topic, "message_thread_id") ?? 0, Name = Str(topic, "name") ?? string.Empty, IconColor = Int(topic, "icon_color"),
+        IconCustomEmojiId = Str(topic, "icon_custom_emoji_id")
+    };
+
+    public static TelegramLocation Location(JsonElement location) =>
+        new(Double(location, "latitude") ?? 0, Double(location, "longitude") ?? 0)
         {
-            User = User(banned.User), Status = TelegramMemberStatus.Banned, UntilDate = OptionalTime(banned.UntilDate)
-        },
-        Api.ChatMemberLeft left => new TelegramChatMember { User = User(left.User), Status = TelegramMemberStatus.Left },
-        _ => new TelegramChatMember { User = User(member.User), Status = TelegramMemberStatus.Member, IsMember = true }
+            HorizontalAccuracy = Double(location, "horizontal_accuracy"),
+            LivePeriod = Long(location, "live_period") is { } period ? TimeSpan.FromSeconds(period) : null,
+            Heading = (int?)Long(location, "heading")
+        };
+
+    public static TelegramPoll Poll(JsonElement poll) => new()
+    {
+        PollId = Str(poll, "id") ?? string.Empty, Question = Str(poll, "question") ?? string.Empty,
+        Options = Items(poll, "options").Select(o => new TelegramPollOption(Str(o, "text") ?? string.Empty, Int(o, "voter_count"))).ToArray(),
+        TotalVoterCount = Int(poll, "total_voter_count"), IsClosed = Bool(poll, "is_closed"), IsAnonymous = Bool(poll, "is_anonymous"),
+        Type = Str(poll, "type") == "quiz" ? TelegramPollType.Quiz : TelegramPollType.Regular,
+        AllowsMultipleAnswers = Bool(poll, "allows_multiple_answers"),
+        CorrectOptionIds = Has(poll, "correct_option_ids", out var ids) ? ids.EnumerateArray().Select(i => i.GetInt32()).ToArray() : null,
+        Explanation = Str(poll, "explanation"), CloseDate = OptionalTime(poll, "close_date")
     };
 
-    public static TelegramInviteLink InviteLink(Api.ChatInviteLink link) => new()
+    public static TelegramForwardOrigin? ForwardOrigin(JsonElement origin) => Str(origin, "type") switch
     {
-        Link = link.InviteLink, Name = link.Name, Creator = link.Creator is { } creator ? User(creator) : null,
-        CreatesJoinRequest = link.CreatesJoinRequest, IsPrimary = link.IsPrimary, IsRevoked = link.IsRevoked,
-        ExpireDate = OptionalTime(link.ExpireDate), MemberLimit = (int?)link.MemberLimit,
-        PendingJoinRequestCount = (int?)link.PendingJoinRequestCount
-    };
-
-    public static TelegramForumTopic Topic(Api.ForumTopic topic) => new()
-    {
-        ThreadId = topic.MessageThreadId, Name = topic.Name, IconColor = (int)topic.IconColor,
-        IconCustomEmojiId = topic.IconCustomEmojiId
-    };
-
-    public static TelegramLocation Location(Api.Location location) => new(location.Latitude, location.Longitude)
-    {
-        HorizontalAccuracy = location.HorizontalAccuracy,
-        LivePeriod = location.LivePeriod is { } period ? TimeSpan.FromSeconds(period) : null,
-        Heading = (int?)location.Heading
-    };
-
-    public static TelegramPoll Poll(Api.Poll poll) => new()
-    {
-        PollId = poll.Id, Question = poll.Question,
-        Options = poll.Options.Select(option => new TelegramPollOption(option.Text, (int)option.VoterCount)).ToArray(),
-        TotalVoterCount = (int)poll.TotalVoterCount, IsClosed = poll.IsClosed, IsAnonymous = poll.IsAnonymous,
-        Type = poll.Type == "quiz" ? TelegramPollType.Quiz : TelegramPollType.Regular,
-        AllowsMultipleAnswers = poll.AllowsMultipleAnswers,
-        CorrectOptionIds = poll.CorrectOptionIds?.Select(id => (int)id).ToArray(), Explanation = poll.Explanation,
-        CloseDate = OptionalTime(poll.CloseDate)
-    };
-
-    public static TelegramForwardOrigin? ForwardOrigin(Api.MessageOrigin? origin) => origin switch
-    {
-        Api.MessageOriginUser user => new TelegramForwardOrigin
-            { Kind = TelegramForwardOriginKind.User, Date = Time(user.Date), User = User(user.SenderUser) },
-        Api.MessageOriginHiddenUser hidden => new TelegramForwardOrigin
-            { Kind = TelegramForwardOriginKind.HiddenUser, Date = Time(hidden.Date), SenderName = hidden.SenderUserName },
-        Api.MessageOriginChat chat => new TelegramForwardOrigin
+        "user" => new TelegramForwardOrigin
+            { Kind = TelegramForwardOriginKind.User, Date = Time(Long(origin, "date") ?? 0), User = User(Prop(origin, "sender_user")) },
+        "hidden_user" => new TelegramForwardOrigin
         {
-            Kind = TelegramForwardOriginKind.Chat, Date = Time(chat.Date), Chat = Chat(chat.SenderChat),
-            AuthorSignature = chat.AuthorSignature
+            Kind = TelegramForwardOriginKind.HiddenUser, Date = Time(Long(origin, "date") ?? 0),
+            SenderName = Str(origin, "sender_user_name")
         },
-        Api.MessageOriginChannel channel => new TelegramForwardOrigin
+        "chat" => new TelegramForwardOrigin
         {
-            Kind = TelegramForwardOriginKind.Channel, Date = Time(channel.Date), Chat = Chat(channel.Chat),
-            MessageId = channel.MessageId, AuthorSignature = channel.AuthorSignature
+            Kind = TelegramForwardOriginKind.Chat, Date = Time(Long(origin, "date") ?? 0), Chat = Chat(Prop(origin, "sender_chat")),
+            AuthorSignature = Str(origin, "author_signature")
+        },
+        "channel" => new TelegramForwardOrigin
+        {
+            Kind = TelegramForwardOriginKind.Channel, Date = Time(Long(origin, "date") ?? 0), Chat = Chat(Prop(origin, "chat")),
+            MessageId = Long(origin, "message_id"), AuthorSignature = Str(origin, "author_signature")
         },
         _ => null
     };
 
-    public static TelegramMessage Message(Api.Message message, JsonElement json) => new()
+    public static TelegramMessage Message(JsonElement message) => new()
     {
-        MessageId = message.MessageId, Chat = Chat(message.Chat),
-        ThreadId = message.IsTopicMessage == true ? message.MessageThreadId : null,
-        From = message.From is { } from ? User(from) : null,
-        SenderChat = message.SenderChat is { } sender ? Chat(sender) : null, Date = Time(message.Date),
-        EditDate = OptionalTime(message.EditDate), MediaGroupId = message.MediaGroupId,
-        ForwardOrigin = ForwardOrigin(message.ForwardOrigin), IsAutomaticForward = message.IsAutomaticForward == true,
-        ViaBot = message.ViaBot is { } via ? User(via) : null, AuthorSignature = message.AuthorSignature,
-        BusinessConnectionId = message.BusinessConnectionId, Json = json
+        MessageId = Long(message, "message_id") ?? 0, Chat = Chat(Prop(message, "chat")), ThreadId = ThreadId(message),
+        From = Has(message, "from", out var from) ? User(from) : null,
+        SenderChat = Has(message, "sender_chat", out var sender) ? Chat(sender) : null, Date = Time(Long(message, "date") ?? 0),
+        EditDate = OptionalTime(message, "edit_date"), MediaGroupId = Str(message, "media_group_id"),
+        ForwardOrigin = Has(message, "forward_origin", out var origin) ? ForwardOrigin(origin) : null,
+        IsAutomaticForward = Bool(message, "is_automatic_forward"), ViaBot = Has(message, "via_bot", out var via) ? User(via) : null,
+        AuthorSignature = Str(message, "author_signature"), BusinessConnectionId = Str(message, "business_connection_id"),
+        Json = message.Clone()
     };
-
-    /// <summary>入站消息中没有通用段的 Telegram 内容。</summary>
-    public static IEnumerable<MessageSegment> NativeSegments(Api.Message message)
-    {
-        const string platform = TelegramMapper.PlatformId;
-        if (message.Venue is { } venue)
-            yield return new RawSegment(platform, TelegramSegmentKinds.Venue,
-                new TelegramVenue(Location(venue.Location), venue.Title, venue.Address)
-                    { FoursquareId = venue.FoursquareId, GooglePlaceId = venue.GooglePlaceId });
-        else if (message.Location is { } location)
-            yield return new RawSegment(platform, TelegramSegmentKinds.Location, Location(location));
-        if (message.Contact is { } contact)
-            yield return new RawSegment(platform, TelegramSegmentKinds.Contact,
-                new TelegramContact(contact.PhoneNumber, contact.FirstName)
-                    { LastName = contact.LastName, UserId = contact.UserId, VCard = contact.Vcard });
-        if (message.Dice is { } dice)
-            yield return new RawSegment(platform, TelegramSegmentKinds.Dice, new TelegramDice(dice.Emoji, (int)dice.Value));
-        if (message.Poll is { } poll)
-            yield return new RawSegment(platform, TelegramSegmentKinds.Poll, Poll(poll));
-        if (message.SuccessfulPayment is { } payment)
-            yield return new RawSegment(platform, TelegramSegmentKinds.SuccessfulPayment, new TelegramSuccessfulPayment
-            {
-                Currency = payment.Currency, TotalAmount = payment.TotalAmount, InvoicePayload = payment.InvoicePayload,
-                TelegramPaymentChargeId = payment.TelegramPaymentChargeId,
-                ProviderPaymentChargeId = payment.ProviderPaymentChargeId, ShippingOptionId = payment.ShippingOptionId,
-                SubscriptionExpirationDate = OptionalTime(payment.SubscriptionExpirationDate)
-            });
-        var text = message.Text ?? message.Caption;
-        var entities = message.Entities ?? message.CaptionEntities;
-        // 只保留真正的格式；话题标签、命令、链接等由 Telegram 自动识别，纯文本已足够表达。
-        if (text is not null && entities?.Any(entity => FormattingEntities.Contains(entity.Type)) == true)
-            yield return new RawSegment(platform, TelegramSegmentKinds.FormattedText, new TelegramFormattedText(text,
-                entities.Select(entity => new TelegramTextEntity(entity.Type, (int)entity.Offset, (int)entity.Length)
-                {
-                    Url = entity.Url, User = entity.User is { } user ? User(user) : null, Language = entity.Language,
-                    CustomEmojiId = entity.CustomEmojiId
-                }).ToArray()));
-    }
 
     /// <summary>发送者设置的格式实体；不含 Telegram 自动识别的 mention、hashtag、bot_command、url 等。</summary>
     private static readonly IReadOnlySet<string> FormattingEntities = new HashSet<string>(StringComparer.Ordinal)
@@ -231,6 +218,44 @@ internal static class TelegramModelConverter
         "bold", "italic", "underline", "strikethrough", "spoiler", "code", "pre", "text_link", "text_mention",
         "custom_emoji", "blockquote", "expandable_blockquote", "date_time"
     };
+
+    /// <summary>入站消息中没有通用段的 Telegram 内容。</summary>
+    public static IEnumerable<MessageSegment> NativeSegments(JsonElement message)
+    {
+        const string platform = TelegramMapper.PlatformId;
+        if (Has(message, "venue", out var venue))
+            yield return new RawSegment(platform, TelegramSegmentKinds.Venue,
+                new TelegramVenue(Location(Prop(venue, "location")), Str(venue, "title") ?? "", Str(venue, "address") ?? "")
+                    { FoursquareId = Str(venue, "foursquare_id"), GooglePlaceId = Str(venue, "google_place_id") });
+        else if (Has(message, "location", out var location))
+            yield return new RawSegment(platform, TelegramSegmentKinds.Location, Location(location));
+        if (Has(message, "contact", out var contact))
+            yield return new RawSegment(platform, TelegramSegmentKinds.Contact,
+                new TelegramContact(Str(contact, "phone_number") ?? "", Str(contact, "first_name") ?? "")
+                    { LastName = Str(contact, "last_name"), UserId = Long(contact, "user_id"), VCard = Str(contact, "vcard") });
+        if (Has(message, "dice", out var dice))
+            yield return new RawSegment(platform, TelegramSegmentKinds.Dice, new TelegramDice(Str(dice, "emoji") ?? "", Int(dice, "value")));
+        if (Has(message, "poll", out var poll))
+            yield return new RawSegment(platform, TelegramSegmentKinds.Poll, Poll(poll));
+        if (Has(message, "successful_payment", out var payment))
+            yield return new RawSegment(platform, TelegramSegmentKinds.SuccessfulPayment, new TelegramSuccessfulPayment
+            {
+                Currency = Str(payment, "currency") ?? "", TotalAmount = Long(payment, "total_amount") ?? 0,
+                InvoicePayload = Str(payment, "invoice_payload") ?? "",
+                TelegramPaymentChargeId = Str(payment, "telegram_payment_charge_id") ?? "",
+                ProviderPaymentChargeId = Str(payment, "provider_payment_charge_id"), ShippingOptionId = Str(payment, "shipping_option_id"),
+                SubscriptionExpirationDate = OptionalTime(payment, "subscription_expiration_date")
+            });
+        var text = Str(message, "text") ?? Str(message, "caption");
+        var entities = (Has(message, "entities", out _) ? Items(message, "entities") : Items(message, "caption_entities")).ToArray();
+        if (text is not null && entities.Any(entity => FormattingEntities.Contains(Str(entity, "type") ?? "")))
+            yield return new RawSegment(platform, TelegramSegmentKinds.FormattedText, new TelegramFormattedText(text,
+                entities.Select(entity => new TelegramTextEntity(Str(entity, "type") ?? "", Int(entity, "offset"), Int(entity, "length"))
+                {
+                    Url = Str(entity, "url"), User = Has(entity, "user", out var user) ? User(user) : null,
+                    Language = Str(entity, "language"), CustomEmojiId = Str(entity, "custom_emoji_id")
+                }).ToArray()));
+    }
 
     /// <summary>已转换为类型化段或 <see cref="TelegramMessage"/> 资料的字段，不再作为原始段上报。</summary>
     public static readonly IReadOnlySet<string> ModeledMessageFields = new HashSet<string>(StringComparer.Ordinal)
@@ -241,10 +266,10 @@ internal static class TelegramModelConverter
         "sender_boost_count", "effect_id", "show_caption_above_media"
     };
 
-    public static TelegramSentMessage Sent(Api.Message message) => new()
+    public static TelegramSentMessage Sent(JsonElement message) => new()
     {
-        MessageId = message.MessageId.ToString(CultureInfo.InvariantCulture), Channel = Channel(message),
-        Timestamp = Time(message.Date), MediaGroupId = message.MediaGroupId
+        MessageId = (Long(message, "message_id") ?? 0).ToString(CultureInfo.InvariantCulture), Channel = MessageChannel(message),
+        Timestamp = Time(Long(message, "date") ?? 0), MediaGroupId = Str(message, "media_group_id")
     };
 
     // ─── 出站 ───
@@ -256,26 +281,29 @@ internal static class TelegramModelConverter
         _ => null
     };
 
-    public static Api.ChatPermissions Permissions(TelegramChatPermissions value) => new()
+    public static JsonObject PermissionsJson(TelegramChatPermissions value)
     {
-        CanSendMessages = value.CanSendMessages, CanSendAudios = value.CanSendAudios,
-        CanSendDocuments = value.CanSendDocuments, CanSendPhotos = value.CanSendPhotos,
-        CanSendVideos = value.CanSendVideos, CanSendVideoNotes = value.CanSendVideoNotes,
-        CanSendVoiceNotes = value.CanSendVoiceNotes, CanSendPolls = value.CanSendPolls,
-        CanSendOtherMessages = value.CanSendOtherMessages, CanAddWebPagePreviews = value.CanAddWebPagePreviews,
-        CanReactToMessages = value.CanReactToMessages, CanChangeInfo = value.CanChangeInfo,
-        CanInviteUsers = value.CanInviteUsers, CanPinMessages = value.CanPinMessages,
-        CanManageTopics = value.CanManageTopics
-    };
+        bool?[] values =
+        [
+            value.CanSendMessages, value.CanSendAudios, value.CanSendDocuments, value.CanSendPhotos, value.CanSendVideos,
+            value.CanSendVideoNotes, value.CanSendVoiceNotes, value.CanSendPolls, value.CanSendOtherMessages,
+            value.CanAddWebPagePreviews, value.CanReactToMessages, value.CanChangeInfo, value.CanInviteUsers, value.CanPinMessages,
+            value.CanManageTopics
+        ];
+        var json = new JsonObject();
+        for (var i = 0; i < PermissionFields.Length; i++)
+            if (values[i] is { } allowed) json[PermissionFields[i]] = allowed;
+        return json;
+    }
 
-    public static Api.InlineKeyboardMarkup? InlineKeyboard(TelegramInlineKeyboard? keyboard) => keyboard is null
+    public static JsonObject? InlineKeyboard(TelegramInlineKeyboard? keyboard) => keyboard is null
         ? null
-        : new Api.InlineKeyboardMarkup
+        : new JsonObject
         {
-            InlineKeyboard = keyboard.Rows.Select(row => (IReadOnlyList<Api.InlineKeyboardButton>)row.Select(InlineButton).ToArray()).ToArray()
+            ["inline_keyboard"] = new JsonArray(keyboard.Rows.Select(row => (JsonNode?)new JsonArray(row.Select(InlineButton).ToArray())).ToArray())
         };
 
-    private static Api.InlineKeyboardButton InlineButton(TelegramInlineButton button)
+    private static JsonNode? InlineButton(TelegramInlineButton button)
     {
         var actions = new object?[]
         {
@@ -283,75 +311,76 @@ internal static class TelegramModelConverter
             button.SwitchInlineQueryCurrentChat, button.CopyText, button.Pay ? true : null
         }.Count(action => action is not null);
         if (actions != 1) throw new ArgumentException($"内联按钮“{button.Text}”必须且只能设置一种动作。");
-        return new Api.InlineKeyboardButton
+        return new JsonObject
         {
-            Text = button.Text, Url = button.Url, CallbackData = button.CallbackData,
-            WebApp = button.WebAppUrl is { } webApp ? new Api.WebAppInfo { Url = webApp } : null,
-            SwitchInlineQuery = button.SwitchInlineQuery,
-            SwitchInlineQueryCurrentChat = button.SwitchInlineQueryCurrentChat,
-            CopyText = button.CopyText is { } copy ? new Api.CopyTextButton { Text = copy } : null,
-            Pay = button.Pay ? true : null
+            ["text"] = button.Text, ["url"] = button.Url, ["callback_data"] = button.CallbackData,
+            ["web_app"] = button.WebAppUrl is { } webApp ? new JsonObject { ["url"] = webApp } : null,
+            ["switch_inline_query"] = button.SwitchInlineQuery, ["switch_inline_query_current_chat"] = button.SwitchInlineQueryCurrentChat,
+            ["copy_text"] = button.CopyText is { } copy ? new JsonObject { ["text"] = copy } : null, ["pay"] = button.Pay ? true : null
         };
     }
 
-    public static Api.ReplyMarkup? ReplyMarkup(TelegramReplyMarkup? markup) => markup switch
+    public static JsonObject? ReplyMarkup(TelegramReplyMarkup? markup) => markup switch
     {
         null => null,
         TelegramInlineKeyboard inline => InlineKeyboard(inline),
-        TelegramReplyKeyboard keyboard => new Api.ReplyKeyboardMarkup
+        TelegramReplyKeyboard keyboard => new JsonObject
         {
-            Keyboard = keyboard.Rows.Select(row => (IReadOnlyList<Api.KeyboardButton>)row.Select(button => new Api.KeyboardButton
+            ["keyboard"] = new JsonArray(keyboard.Rows.Select(row => (JsonNode?)new JsonArray(row.Select(button => (JsonNode?)new JsonObject
             {
-                Text = button.Text, RequestContact = button.RequestContact ? true : null,
-                RequestLocation = button.RequestLocation ? true : null,
-                RequestPoll = button.RequestPoll || button.RequestPollType is not null
-                    ? new Api.KeyboardButtonPollType { Type = button.RequestPollType switch
+                ["text"] = button.Text, ["request_contact"] = button.RequestContact ? true : null,
+                ["request_location"] = button.RequestLocation ? true : null,
+                ["request_poll"] = button.RequestPoll || button.RequestPollType is not null
+                    ? new JsonObject
                     {
-                        TelegramPollType.Quiz => "quiz", TelegramPollType.Regular => "regular", _ => null
-                    } }
+                        ["type"] = button.RequestPollType switch
+                        {
+                            TelegramPollType.Quiz => "quiz", TelegramPollType.Regular => "regular", _ => null
+                        }
+                    }
                     : null,
-                WebApp = button.WebAppUrl is { } webApp ? new Api.WebAppInfo { Url = webApp } : null
-            }).ToArray()).ToArray(),
-            IsPersistent = keyboard.IsPersistent ? true : null, ResizeKeyboard = keyboard.ResizeKeyboard ? true : null,
-            OneTimeKeyboard = keyboard.OneTimeKeyboard ? true : null,
-            InputFieldPlaceholder = keyboard.InputFieldPlaceholder, Selective = keyboard.Selective ? true : null
+                ["web_app"] = button.WebAppUrl is { } webApp ? new JsonObject { ["url"] = webApp } : null
+            }).ToArray())).ToArray()),
+            ["is_persistent"] = keyboard.IsPersistent ? true : null, ["resize_keyboard"] = keyboard.ResizeKeyboard ? true : null,
+            ["one_time_keyboard"] = keyboard.OneTimeKeyboard ? true : null,
+            ["input_field_placeholder"] = keyboard.InputFieldPlaceholder, ["selective"] = keyboard.Selective ? true : null
         },
-        TelegramRemoveKeyboard remove => new Api.ReplyKeyboardRemove { RemoveKeyboard = true, Selective = remove.Selective ? true : null },
-        TelegramForceReply force => new Api.ForceReply
+        TelegramRemoveKeyboard remove => new JsonObject { ["remove_keyboard"] = true, ["selective"] = remove.Selective ? true : null },
+        TelegramForceReply force => new JsonObject
         {
-            ForceReplyValue = true, InputFieldPlaceholder = force.InputFieldPlaceholder,
-            Selective = force.Selective ? true : null
+            ["force_reply"] = true, ["input_field_placeholder"] = force.InputFieldPlaceholder, ["selective"] = force.Selective ? true : null
         },
         _ => throw new NotSupportedException("未知的 Telegram 键盘类型：" + markup.GetType().Name)
     };
 
-    public static Api.BotCommandScope? Scope(TelegramCommandScope? scope)
+    public static JsonObject? Scope(TelegramCommandScope? scope)
     {
         if (scope is null) return null;
-        Api.ChatId Chat() => ParseChat(scope.ChatId ?? throw new ArgumentException("该命令范围需要 ChatId。")).Chat;
+        JsonNode Chat() => ParseChat(scope.ChatId ?? throw new ArgumentException("该命令范围需要 ChatId。")).Chat;
         return scope.Kind switch
         {
-            TelegramCommandScopeKind.Default => new Api.BotCommandScopeDefault(),
-            TelegramCommandScopeKind.AllPrivateChats => new Api.BotCommandScopeAllPrivateChats(),
-            TelegramCommandScopeKind.AllGroupChats => new Api.BotCommandScopeAllGroupChats(),
-            TelegramCommandScopeKind.AllChatAdministrators => new Api.BotCommandScopeAllChatAdministrators(),
-            TelegramCommandScopeKind.Chat => new Api.BotCommandScopeChat { ChatId = Chat() },
-            TelegramCommandScopeKind.ChatAdministrators => new Api.BotCommandScopeChatAdministrators { ChatId = Chat() },
-            TelegramCommandScopeKind.ChatMember => new Api.BotCommandScopeChatMember
+            TelegramCommandScopeKind.Default => new JsonObject { ["type"] = "default" },
+            TelegramCommandScopeKind.AllPrivateChats => new JsonObject { ["type"] = "all_private_chats" },
+            TelegramCommandScopeKind.AllGroupChats => new JsonObject { ["type"] = "all_group_chats" },
+            TelegramCommandScopeKind.AllChatAdministrators => new JsonObject { ["type"] = "all_chat_administrators" },
+            TelegramCommandScopeKind.Chat => new JsonObject { ["type"] = "chat", ["chat_id"] = Chat() },
+            TelegramCommandScopeKind.ChatAdministrators => new JsonObject { ["type"] = "chat_administrators", ["chat_id"] = Chat() },
+            TelegramCommandScopeKind.ChatMember => new JsonObject
             {
-                ChatId = Chat(), UserId = TelegramMapper.ParseId(scope.UserId ?? throw new ArgumentException("该命令范围需要 UserId。"), "userId")
+                ["type"] = "chat_member", ["chat_id"] = Chat(),
+                ["user_id"] = TelegramMapper.ParseId(scope.UserId ?? throw new ArgumentException("该命令范围需要 UserId。"), "userId")
             },
             _ => throw new NotSupportedException("未知的命令范围：" + scope.Kind)
         };
     }
 
     /// <summary>会话参数：数字 ID、@username 或 SDK 频道 ID（chatId:threadId）。</summary>
-    public static (Api.ChatId Chat, long? ThreadId) ParseChat(string chatId)
+    public static (JsonNode Chat, long? ThreadId) ParseChat(string chatId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(chatId);
-        if (chatId.StartsWith('@')) return (chatId, null);
+        if (chatId.StartsWith('@')) return (JsonValue.Create(chatId), null);
         var (chat, thread) = TelegramMapper.ParseChannelId(chatId);
-        return (chat, thread);
+        return (JsonValue.Create(chat), thread);
     }
 
     public static string ChatAction(TelegramChatAction action) => action switch
@@ -370,19 +399,22 @@ internal static class TelegramModelConverter
         _ => throw new NotSupportedException("未知的会话动作：" + action)
     };
 
-    /// <summary>资源 URI 转为 Bot API 文件：file_id（可带 tgfile://）和 HTTP(S) 交给 Telegram，本地与 base64 内容由适配器上传。</summary>
-    public static async Task<Api.InputFile> InputFileAsync(string uri, string? fileName, CancellationToken token, HttpClient? downloads = null)
+    /// <summary>
+    ///     资源 URI 转为 Bot API 文件参数：file_id（可带 tgfile://）和 HTTP(S) 地址交给 Telegram；本地与 base64 内容由适配器上传，
+    ///     加入 <paramref name="uploads"/>。<paramref name="attachName"/> 为 null 时作为同名顶层参数上传，返回 null（不写入 JSON）；
+    ///     否则返回 attach:// 引用，用于 InputMedia 等嵌套对象。
+    /// </summary>
+    public static async Task<JsonNode?> FileAsync(string uri, string? fileName, string parameter, string? attachName,
+        List<TelegramUpload> uploads, HttpClient? downloads, CancellationToken token)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(uri);
-        if (uri.StartsWith("tgfile://", StringComparison.Ordinal)) return Api.InputFile.FromFileId(uri[9..]);
-        if (Uri.TryCreate(uri, UriKind.Absolute, out var parsed) && parsed.Scheme is "http" or "https")
-            return Api.InputFile.FromUrl(uri);
-        if (Path.IsPathFullyQualified(uri) || uri.StartsWith("file:", StringComparison.OrdinalIgnoreCase)
-            || uri.StartsWith("data:", StringComparison.Ordinal) || uri.StartsWith("base64://", StringComparison.Ordinal))
-        {
-            var file = await ResourceReader.ReadAsync(uri, fileName, token, downloads);
-            return Api.InputFile.FromBytes(file.Bytes, file.FileName);
-        }
-        return Api.InputFile.FromFileId(uri);
+        if (uri.StartsWith("tgfile://", StringComparison.Ordinal)) return uri[9..];
+        if (Uri.TryCreate(uri, UriKind.Absolute, out var parsed) && parsed.Scheme is "http" or "https") return uri;
+        if (!(Path.IsPathFullyQualified(uri) || uri.StartsWith("file:", StringComparison.OrdinalIgnoreCase)
+              || uri.StartsWith("data:", StringComparison.Ordinal) || uri.StartsWith("base64://", StringComparison.Ordinal)))
+            return uri; // 已有的 file_id
+        var file = await ResourceReader.ReadAsync(uri, fileName, token, downloads);
+        uploads.Add(new TelegramUpload(attachName ?? parameter, file.FileName, new MemoryStream(file.Bytes)));
+        return attachName is null ? null : "attach://" + attachName;
     }
 }

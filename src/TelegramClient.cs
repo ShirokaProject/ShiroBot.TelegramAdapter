@@ -4,7 +4,6 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using ShiroBot.Telegram.Model;
-using ShiroBot.Telegram.Model.BotApi;
 
 namespace ShiroBot.TelegramAdapter;
 
@@ -113,55 +112,66 @@ public sealed class TelegramClient : IDisposable
     public Task CallAsync(string method, object? payload = null, CancellationToken cancellationToken = default) =>
         CallAsync<JsonElement>(method, payload, cancellationToken);
 
+    /// <summary>Bot API 10.4 的全部 Update 种类，用于 getUpdates 的 allowed_updates。</summary>
+    public static IReadOnlyList<string> UpdateTypes { get; } =
+    [
+        "message", "edited_message", "channel_post", "edited_channel_post", "business_connection", "business_message",
+        "edited_business_message", "deleted_business_messages", "guest_message", "message_reaction", "message_reaction_count",
+        "inline_query", "chosen_inline_result", "callback_query", "widget_query", "shared_widget_query", "shipping_query",
+        "pre_checkout_query", "purchased_paid_media", "poll", "poll_answer", "my_chat_member", "chat_member",
+        "chat_join_request", "chat_boost", "removed_chat_boost", "managed_bot", "subscription", "stopped_message_generation"
+    ];
+
     /// <summary>
-    ///     调用 Bot API 方法并返回原始 result。参数使用生成的 Bot API 类型序列化；包含上传文件时
-    ///     自动改用 multipart，嵌套对象中的上传以 attach:// 引用。
+    ///     调用 Bot API 方法并返回原始 result。值为 null 的参数不发送；有上传文件时改用 multipart，
+    ///     字符串参数原样发送，其他参数 JSON 序列化，嵌套对象中的文件以 attach://名称 引用。
     /// </summary>
-    public async Task<JsonElement> InvokeAsync(string method, IReadOnlyList<KeyValuePair<string, object?>> parameters,
+    public async Task<JsonElement> InvokeAsync(string method, JsonObject? parameters, IReadOnlyList<TelegramUpload>? uploads = null,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var uploads = new List<KeyValuePair<string, InputFile>>();
-        var fields = new List<KeyValuePair<string, JsonNode?>>();
-        using (BotApiUploads.Collect(uploads))
-        {
-            foreach (var (name, value) in parameters)
-            {
-                if (value is null) continue;
-                if (value is InputFile { IsUpload: true } file)
-                {
-                    uploads.Add(new(name, file));
-                    continue;
-                }
-                fields.Add(new(name, JsonSerializer.SerializeToNode(value, value.GetType(), BotApiJson.Options)));
-            }
-        }
-
+        var body = parameters is null ? new JsonObject() : WithoutNulls(parameters);
         HttpContent content;
-        if (uploads.Count == 0)
-        {
-            var body = new JsonObject();
-            foreach (var (name, node) in fields) body[name] = node;
+        if (uploads is not { Count: > 0 })
             content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json");
-        }
         else
         {
             var form = new MultipartFormDataContent();
-            foreach (var (name, node) in fields)
+            foreach (var (name, node) in body)
             {
-                // Multipart fields carry strings as-is and everything else JSON-serialized.
                 var text = node is JsonValue scalar && scalar.GetValueKind() == JsonValueKind.String
                     ? scalar.GetValue<string>()
-                    : node?.ToJsonString() ?? "null";
+                    : node!.ToJsonString();
                 form.Add(new StringContent(text, Encoding.UTF8), name);
             }
-            foreach (var (name, file) in uploads) form.Add(file.CreateContent(), name, file.FileName ?? name);
+            foreach (var upload in uploads)
+            {
+                var part = new StreamContent(upload.Content);
+                part.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
+                form.Add(part, upload.Name, upload.FileName);
+            }
             content = form;
         }
 
         using (content)
         using (var response = await _http.PostAsync(method, content, cancellationToken))
             return await ReadResultAsync(method, response, cancellationToken);
+    }
+
+    /// <summary>深拷贝并移除值为 null 的属性：Telegram 会拒绝显式 null 参数。</summary>
+    private static JsonObject WithoutNulls(JsonObject source)
+    {
+        var result = new JsonObject();
+        foreach (var (name, node) in source)
+            if (node is not null) result[name] = Clean(node);
+        return result;
+
+        static JsonNode Clean(JsonNode node) => node switch
+        {
+            JsonObject child => WithoutNulls(child),
+            JsonArray array => new JsonArray(array.Where(item => item is not null).Select(item => (JsonNode?)Clean(item!)).ToArray()),
+            _ => node.DeepClone()
+        };
     }
 
     private static async Task<JsonElement> ReadResultAsync(string method, HttpResponseMessage response, CancellationToken token)
@@ -184,9 +194,14 @@ public sealed class TelegramClient : IDisposable
         int? code = isObject && body.TryGetProperty("error_code", out var errorCode) && errorCode.TryGetInt32(out var number)
             ? number : (int)response.StatusCode;
         var description = isObject && body.TryGetProperty("description", out var text) ? text.GetString() : response.ReasonPhrase;
-        var parameters = isObject && body.TryGetProperty("parameters", out var raw)
-            ? raw.Deserialize<ResponseParameters>(BotApiJson.Options) : null;
-        throw new TelegramApiException(method, code, description, parameters);
+        int? retryAfter = null;
+        long? migrateTo = null;
+        if (isObject && body.TryGetProperty("parameters", out var raw) && raw.ValueKind == JsonValueKind.Object)
+        {
+            if (raw.TryGetProperty("retry_after", out var retry) && retry.TryGetInt32(out var seconds)) retryAfter = seconds;
+            if (raw.TryGetProperty("migrate_to_chat_id", out var migrate) && migrate.TryGetInt64(out var chatId)) migrateTo = chatId;
+        }
+        throw new TelegramApiException(method, code, description, retryAfter, migrateTo);
     }
 
     /// <summary>getUpdates 长轮询循环。每收到一个 Update 依次触发 RawUpdateReceived 和 UpdateReceived。</summary>
@@ -198,7 +213,7 @@ public sealed class TelegramClient : IDisposable
             {
                 offset = _updateOffset,
                 timeout = 50,
-                allowed_updates = BotApiInfo.UpdateTypes
+                allowed_updates = UpdateTypes
             }, cancellationToken);
 
             foreach (var raw in updates)
@@ -218,18 +233,21 @@ public sealed class TelegramClient : IDisposable
     }
 }
 
+/// <summary>上传到 Bot API 的文件；Name 为参数名或 attach:// 引用名，内容在请求发送时读取。</summary>
+public sealed record TelegramUpload(string Name, string FileName, Stream Content);
+
 /// <summary>Telegram Bot API 返回 ok=false 或非 JSON 响应。</summary>
-public sealed class TelegramApiException(string method, int? errorCode, string? description, ResponseParameters? parameters = null)
+public sealed class TelegramApiException(string method, int? errorCode, string? description, int? retryAfterSeconds = null,
+    long? migrateToChatId = null)
     : InvalidOperationException($"Telegram API {method} 失败: [{errorCode}] {description}")
 {
     public string Method { get; } = method;
     public int? ErrorCode { get; } = errorCode;
     public string? Description { get; } = description;
-    public ResponseParameters? Parameters { get; } = parameters;
 
     /// <summary>触发限流时需要等待的时间。</summary>
-    public TimeSpan? RetryAfter => Parameters?.RetryAfter is { } seconds ? TimeSpan.FromSeconds(seconds) : null;
+    public TimeSpan? RetryAfter { get; } = retryAfterSeconds is { } seconds ? TimeSpan.FromSeconds(seconds) : null;
 
     /// <summary>群组已升级为超级群组时的新 chat_id。</summary>
-    public long? MigrateToChatId => Parameters?.MigrateToChatId;
+    public long? MigrateToChatId { get; } = migrateToChatId;
 }

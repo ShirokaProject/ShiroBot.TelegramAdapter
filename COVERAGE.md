@@ -70,7 +70,7 @@
 | FileCapabilities / FileUploadRequest / FileUploadResult | 支持上传、发布语义、范围限定凭据 | 支持上传、发布语义、范围限定凭据 |
 
 接收到的协议 DTO 使用 `JsonExtensionData` 保存未建模字段，事件的 `Raw` 保留完整已接收数据。
-SDK 映射层只覆盖 SDK 1.0.3 合约；Telegram 的全部协议对象另由下文的 `ITelegramBotApi` 强类型提供。SDK/宿主负责写入 `InstanceId`、构造路由引用和包装发送结果。
+SDK 映射层只覆盖 SDK 1.0.4 合约；Telegram 特有能力由共享 Model 提供，其余方法通过原始调用使用。SDK/宿主负责写入 `InstanceId`、构造路由引用和包装发送结果。
 
 按钮回调将 ID 与 Data 一起编码，长度校验按编码后的实际字节计算。不会截断回调数据。
 交互令牌和上传句柄缓存有容量限制，实例停止后释放；不能跨实例复用。
@@ -91,19 +91,11 @@ SDK 映射层只覆盖 SDK 1.0.3 合约；Telegram 的全部协议对象另由�
 
 已转换为 `TelegramMessage` 资料的元数据字段（如 media_group_id、forward_origin、edit_date）不再重复作为 RawSegment 上报。
 
-## Telegram Bot API 10.4 清单
+## Telegram Bot API 10.4
 
-`ITelegramBotApi`（`GetExtension<ITelegramBotApi>()` / `Context.GetAdapterExtension<ITelegramBotApi>()`）
-由 `scripts/codegen` 按规范生成，回归测试逐项核对规范中的方法和类型均已生成。
-
-| 范围 | 数量 | 说明 |
-| --- | --- | --- |
-| 方法 | 193 | 每个方法一个强类型重载，参数与官方文档一一对应；另有 `CallAsync` 调用规范之后新增的方法 |
-| 类型 | 395 | `ShiroBot.Telegram.Model.BotApi` 命名空间，未知字段保存在 `AdditionalData` |
-| 联合类型 | 31 | 接口 + 鉴别字段解析；未知取值为 `*Unknown`，含 `ReplyMarkup` 等多类型参数 |
-| Update 种类 | 29 | 长轮询全部订阅；`UpdateReceived` 提供强类型 `Update`，SDK 事件映射保持不变 |
-| 上传 | 全部 | 方法参数直接上传；`InputMedia*`、`InputPaidMedia*`、`InputSticker`、`InputProfilePhoto*`、`InputStoryContent*` 中以 `attach://` 上传 |
-| 错误 | 全部 | `TelegramApiException`：`ErrorCode`、`Description`、`RetryAfter`、`MigrateToChatId` |
+共享 Model 没有单独封装的方法通过 `ITelegramRawApi.CallAsync` 调用，参数为 JSON，支持 multipart 上传与 `attach://` 引用；
+`UpdateReceived` 提供全部 Update 的原始 JSON。长轮询订阅 Bot API 10.4 的全部 29 种 Update。
+失败抛出 `TelegramApiException`（适配器内部类型），消息包含错误码与说明，并解析 `retry_after` 与 `migrate_to_chat_id`。
 
 Bot API 自身的限制不变：没有按 ID 读取任意消息、历史消息、完整成员列表和会话枚举的方法；
 调用 `getUpdates` 或 `setWebhook` 会与适配器的长轮询冲突。

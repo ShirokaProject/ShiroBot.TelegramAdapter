@@ -1,8 +1,8 @@
 # ShiroBot.TelegramAdapter
 
 基于官方 `ShiroBot.Templates 1.0.4` 和 `ShiroBot.SDK 1.0.4` 的 Telegram Bot API 长轮询适配器，
-目标框架 .NET 11，适配器版本 `0.5.0`。完整覆盖 **Telegram Bot API 10.4**（2026-11-09）：
-193 个方法、全部类型和全部 Update 种类。
+目标框架 .NET 11，适配器版本 `0.5.0`。实现宿主共享 Model `ShiroBot.Model.Telegram` 1.1，
+并通过原始调用覆盖 **Telegram Bot API 10.4**（2026-11-09）的全部方法与 Update 种类。
 
 > SDK 1.0.4 尚未发布。发布前在本地打包宿主仓库的 SDK 再构建：
 > `dotnet pack ../ShiroBot/SDK/Packaging/ShiroBot.SDK.Package.csproj -c Release -o /tmp/shirobot-feed`，
@@ -25,6 +25,7 @@ Windows 命令行使用 `powershell -ExecutionPolicy Bypass -File scripts/dev.ps
 访问 `http://127.0.0.1:7002/dashboard/`，登录密钥见开发宿主 `config.toml` 的 `[api].token`。
 同一时间只运行一个使用此端口的开发宿主。添加 Telegram 适配器实例，填写 BotFather 提供的
 **Bot Token** 并连接。**API Base URL** 留空使用官方服务器，使用自建 Bot API Server 时填写其地址。
+网络需要代理时填写 **代理**（如 `http://127.0.0.1:7897` 或 `socks5://127.0.0.1:7891`），留空使用系统代理设置。
 配置由宿主管理，修改后重启该实例。每个 Token 只能有一个长轮询实例，使用前需移除已有 webhook。
 
 在 Telegram 私聊机器人发送 `ping`（应回复 `pong`）、`adapter-info` 或 `adapter-echo hello`。
@@ -60,59 +61,30 @@ await telegram.SendAsync(message.Channel, new TelegramPollContent("午饭？", [
 按钮回调默认自动确认。需要提示或弹窗时，在适配器配置中关闭 **自动确认按钮回调**，再调用
 `ITelegramMessageApi.AnswerCallbackAsync`。
 
-## 完整 Bot API
+## 全部 Bot API
 
-适配器程序集中的 `ITelegramBotApi` 提供 Bot API 的全部方法，每个方法一个强类型重载，
-参数名与官方文档一致（`snake_case` 转为 camelCase），必填参数在前：
+共享 Model 没有单独封装的方法，通过 `ITelegramRawApi` 直接调用，参数使用 Bot API 的 snake_case 名称，
+只依赖 System.Text.Json，插件同样不需要引用本适配器：
 
 ```csharp
-using ShiroBot.TelegramAdapter.BotApi;
-using Api = ShiroBot.Telegram.Model.BotApi;
+using System.Text.Json.Nodes;
+using ShiroBot.Model.Telegram;
 
-var telegram = Context.GetAdapterExtension<ITelegramBotApi>()!;
+var raw = Context.GetAdapterExtension<ITelegramRawApi>()!;
+var result = await raw.CallAsync("setChatMenuButton", new JsonObject
+{
+    ["menu_button"] = new JsonObject { ["type"] = "commands" }
+});
 
-await telegram.SendPollAsync(-1001234567890, "午饭？",
-    [new Api.InputPollOption { Text = "面" }, new Api.InputPollOption { Text = "饭" }]);
-
-await telegram.SendMediaGroupAsync(-1001234567890, [
-    new Api.InputMediaPhoto { Media = Api.InputFile.FromBytes(bytes, "a.jpg"), Caption = "上传" },
-    new Api.InputMediaPhoto { Media = "已有的 file_id 或 https:// 地址" }
-]);
-
-if (await telegram.GetChatMemberAsync("@channel", userId) is Api.ChatMemberAdministrator admin) { /* ... */ }
-
-// 每个 Update 的强类型对象，包括没有映射为 SDK 事件的种类。
-telegram.UpdateReceived += update => Task.CompletedTask;
+await using var file = File.OpenRead("cover.jpg");
+await raw.CallAsync("sendPhoto", new JsonObject { ["chat_id"] = 123456 }, [new TelegramUploadFile("photo", "cover.jpg", file)]);
 ```
 
-- `Api.ChatId` 接受数字 ID 或 `@username`；`Api.InputFile` 接受 file_id、HTTP(S) 地址、字节或流。
-  含上传时自动改用 multipart，`InputMedia*`、`InputSticker`、`InputProfilePhoto*`、`InputStoryContent*`
-  中的上传以 `attach://` 引用。
-- 联合类型（`ChatMember`、`ReactionType`、`InputMedia`、`MessageOrigin`、`RichText` 等）是接口，
-  按鉴别字段解析为具体类型；本版本未知的取值解析为 `*Unknown` 记录，字段不丢失。
-- 所有对象都有 `AdditionalData`，Telegram 新增的字段原样保留，发送时写回。
-- 编辑类方法返回 `Message?`：编辑 inline 消息时 Telegram 返回 True，对应 `null`。
-- 失败抛出 `TelegramApiException`，包含 `ErrorCode`、`Description`、`RetryAfter`、`MigrateToChatId`。
-- 规范之后新增的方法可用 `CallAsync("methodName", parameters)` 调用，返回原始 `JsonElement`。
-
-长轮询由适配器负责：自行调用 `GetUpdatesAsync` 会抢走更新，`SetWebhookAsync` 会让轮询失效，
-直到调用 `DeleteWebhookAsync`。轮询订阅规范列出的全部 Update 种类。
-
-这些类型属于适配器程序集，插件在独立加载上下文中无法与之共享类型；插件请使用上面的 Telegram Model，
-其中 `ITelegramRawApi` 同样可以调用全部方法。`ITelegramBotApi` 适合在适配器内部或同一程序集中使用。
-
-### 更新到新的 Bot API
-
-类型和方法由 `scripts/codegen/generate_bot_api.py` 从仓库中固定版本的
-[telegram-bot-api-spec](https://github.com/PaulSonOfLars/telegram-bot-api-spec) 生成，不要手工修改 `*.g.cs`：
-
-```sh
-curl -fL https://raw.githubusercontent.com/PaulSonOfLars/telegram-bot-api-spec/main/api.json \
-    -o scripts/codegen/telegram-bot-api.json
-python3 scripts/codegen/generate_bot_api.py
-```
-
-CI 会重新生成并检查结果与提交的代码一致。
+- 值为 null 的参数不会发送；有文件时自动改用 multipart，嵌套对象中的文件以 `attach://名称` 引用。
+- `UpdateReceived` 提供每个 Update 的原始 JSON，包括没有映射为 SDK 事件的种类。
+- 失败抛出异常，消息包含 Telegram 错误码与说明；限流时带有需要等待的秒数。
+- 长轮询由适配器负责，订阅 Bot API 10.4 的全部 Update 种类：自行调用 `getUpdates` 会抢走更新，
+  `setWebhook` 会让轮询失效，直到调用 `deleteWebhook`。
 
 ## SDK 接口覆盖
 
@@ -138,12 +110,12 @@ dotnet build ShiroBot.TelegramAdapter.csproj -c Release
 
 自动验证使用模拟 HTTP 响应，覆盖 SDK 接口调用、取消、话题与引用回复、媒体发送参数、
 能力检查、显式降级、自建 API 下载地址、长轮询事件顺序、身份隔离和配置管理。
-Bot API 部分检查规范中的每个方法和类型都已生成，并验证 JSON 与 multipart 请求、`attach://` 上传、
-联合类型解析、未知值保留、错误参数和强类型 Update。
+共享 Model 部分验证各接口的请求参数、multipart 与 `attach://` 上传、原生内容段、特有事件负载和回调提示；
+客户端部分验证真实格式的 Token、代理、显式 null 参数、错误参数和长轮询订阅。
 真实 Telegram 收发需要有效 Bot Token，通过上面的 TestPlugin 命令验证。
 
 Release 会把私有 DTO 程序集合并进 `bin/Release/net11.0/ShiroBot.TelegramAdapter.dll`，
-不打包宿主提供的 SDK/Model，可以直接安装该 DLL。GitHub Actions 负责构建、生成代码检查、
+不打包宿主提供的 SDK/Model，可以直接安装该 DLL。GitHub Actions 负责构建、
 回归验证、版本校验和打包；推送与版本一致的 `v0.5.0` 标签时发布产物。TestPlugin 不进入 Release 包。
 
 ## 许可证

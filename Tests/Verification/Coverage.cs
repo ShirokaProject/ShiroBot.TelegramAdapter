@@ -43,7 +43,7 @@ internal static class Coverage
             ("_reactions", new TelegramReactionService(client))
         }) typeof(TelegramAdapter).GetField(name, BindingFlags.NonPublic | BindingFlags.Instance)!.SetValue(adapter, service);
         Check(adapter.GetExtension<IFileService>() is not null && adapter.GetExtension<IMessageReactionService>() is not null
-            && adapter.GetExtension<IMessageInteractionService>() is not null && adapter.GetExtension<ITelegramModelService>() is not null,
+            && adapter.GetExtension<IMessageInteractionService>() is not null,
             "Optional services are not exposed through the adapter.");
         var target = new Channel("-100:42", ChannelType.Thread);
         var received = new List<BotEvent>();
@@ -60,9 +60,8 @@ internal static class Coverage
         Check(incoming.Raw is ShiroBot.Model.Telegram.TelegramMessage { MessageId: 1 } native
               && native.Json.GetProperty("future_field").GetProperty("keep").GetBoolean()
               && incoming.Segments.OfType<RawSegment>().Any(s => s.Kind == "future_field"), "Unknown message fields lost.");
-        Check((await users.GetUserAsync("7"))?.Id == "7" && (await users.GetTelegramUserAsync("7")).LastName == "Last", "Shared TelegramUser fields lost.");
-        Check((await users.GetTelegramUserAsync()).IsBot, "Self shared Model missing.");
-        Check((await users.GetTelegramMemberAsync("-100", "7")).FirstName == "First", "Member shared Model missing.");
+        var known = new TelegramModelApi(client, mapper).FindKnownUser("7");
+        Check((await users.GetUserAsync("7"))?.Id == "7" && known is { LastName: "Last", Username: "user" }, "Shared TelegramUser fields lost.");
         await Unsupported(() => users.GetUserAsync("999"));
         await Unsupported(() => users.GetFriendsAsync());
         await Unsupported(() => users.AcceptFriendRequestAsync("x"));

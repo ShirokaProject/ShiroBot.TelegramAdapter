@@ -3,7 +3,6 @@ using ShiroBot.Model.Telegram;
 using ShiroBot.SDK.Adapter;
 using ShiroBot.SDK.Models;
 using ShiroBot.Telegram.Model;
-using Api = ShiroBot.Telegram.Model.BotApi;
 using static ShiroBot.TelegramAdapter.TelegramModelConverter;
 
 namespace ShiroBot.TelegramAdapter.Services;
@@ -27,11 +26,10 @@ public sealed class TelegramEventService(TelegramMapper mapper, Func<TelegramInt
     private async Task OnRawUpdateAsync(JsonElement json)
     {
         var update = json.Deserialize<TgUpdate>(DtoOptions)!;
-        var typed = json.Deserialize<Api.Update>(Api.BotApiJson.Options)!;
         var interactions = getInteractions?.Invoke();
         if (update.CallbackQuery is { } callback && interactions is not null)
             await interactions.RegisterAsync(callback);
-        foreach (var botEvent in Map(update, typed, json, interactions)) await PublishAsync(botEvent);
+        foreach (var botEvent in Map(update, json, interactions)) await PublishAsync(botEvent);
     }
 
     private PlatformEvent Platform(string kind, object raw, Channel? channel = null) => new()
@@ -42,7 +40,7 @@ public sealed class TelegramEventService(TelegramMapper mapper, Func<TelegramInt
     private static JsonElement Field(JsonElement update, string name) =>
         update.TryGetProperty(name, out var value) ? value.Clone() : default;
 
-    private IEnumerable<BotEvent> Map(TgUpdate update, Api.Update typed, JsonElement json, TelegramInteractionService? interactions)
+    private IEnumerable<BotEvent> Map(TgUpdate update, JsonElement json, TelegramInteractionService? interactions)
     {
         var updateId = update.UpdateId;
 
@@ -72,25 +70,24 @@ public sealed class TelegramEventService(TelegramMapper mapper, Func<TelegramInt
             }
             else
             {
-                yield return mapper.ToMessageEvent(message, typed.Message, Field(json, "message"));
+                yield return mapper.ToMessageEvent(message, Field(json, "message"));
             }
         }
 
         if (update.ChannelPost is { } post)
-            yield return mapper.ToMessageEvent(post, typed.ChannelPost, Field(json, "channel_post"));
+            yield return mapper.ToMessageEvent(post, Field(json, "channel_post"));
 
         if ((update.EditedMessage ?? update.EditedChannelPost) is { } edited)
         {
             var isChannel = update.EditedMessage is null;
-            var editedTyped = (isChannel ? typed.EditedChannelPost : typed.EditedMessage)!;
             var editedJson = Field(json, isChannel ? "edited_channel_post" : "edited_message");
             var channel = TelegramMapper.ToChannel(edited.Chat, edited.MessageThreadId);
             yield return Platform(TelegramEventKinds.MessageEdited, new TelegramMessageEdited
             {
-                UpdateId = updateId, Time = Time(editedTyped.EditDate ?? editedTyped.Date), Json = editedJson,
+                UpdateId = updateId, Time = Time(Long(editedJson, "edit_date") ?? Long(editedJson, "date") ?? 0), Json = editedJson,
                 Channel = channel, MessageId = edited.MessageId.ToString(), IsChannelPost = isChannel,
-                Message = TelegramModelConverter.Message(editedTyped, editedJson),
-                Segments = [.. mapper.ResolveMentions(TelegramMapper.ToSegments(edited)), .. NativeSegments(editedTyped)]
+                Message = TelegramModelConverter.Message(editedJson),
+                Segments = [.. mapper.ResolveMentions(TelegramMapper.ToSegments(edited)), .. NativeSegments(editedJson)]
             }, channel);
         }
 
@@ -148,85 +145,85 @@ public sealed class TelegramEventService(TelegramMapper mapper, Func<TelegramInt
                 };
             }
         }
-        if (typed.ChatJoinRequest is { } join)
+        if (update.ChatJoinRequest is { } joinRequest)
         {
-            mapper.Remember(update.ChatJoinRequest!.From);
+            var join = Field(json, "chat_join_request");
+            mapper.Remember(joinRequest.From);
             yield return Platform(TelegramEventKinds.ChatJoinRequest, new TelegramChatJoinRequest
             {
-                UpdateId = updateId, Time = Time(join.Date), Json = Field(json, "chat_join_request"),
-                Chat = Chat(join.Chat), User = User(join.From), UserChatId = join.UserChatId, Bio = join.Bio,
-                InviteLink = join.InviteLink is { } link ? InviteLink(link) : null
-            }, TelegramMapper.ToChannel(update.ChatJoinRequest.Chat));
+                UpdateId = updateId, Time = Time(Long(join, "date") ?? 0), Json = join, Chat = Chat(Prop(join, "chat")),
+                User = User(Prop(join, "from")), UserChatId = Long(join, "user_chat_id") ?? 0, Bio = Str(join, "bio"),
+                InviteLink = Has(join, "invite_link", out var link) ? InviteLink(link) : null
+            }, TelegramMapper.ToChannel(joinRequest.Chat));
         }
 
-        foreach (var (kind, source, field) in new[]
+        foreach (var (kind, field) in new[]
                  {
-                     (TelegramEventKinds.ChatMemberUpdated, typed.ChatMember, "chat_member"),
-                     (TelegramEventKinds.MyChatMemberUpdated, typed.MyChatMember, "my_chat_member")
+                     (TelegramEventKinds.ChatMemberUpdated, "chat_member"), (TelegramEventKinds.MyChatMemberUpdated, "my_chat_member")
                  })
         {
-            if (source is null) continue;
+            if (!Has(json, field, out var source)) continue;
             yield return Platform(kind, new TelegramChatMemberUpdated
             {
-                UpdateId = updateId, Time = Time(source.Date), Json = Field(json, field), Chat = Chat(source.Chat),
-                Actor = User(source.From), OldMember = Member(source.OldChatMember), NewMember = Member(source.NewChatMember),
-                InviteLink = source.InviteLink is { } link ? InviteLink(link) : null,
-                ViaJoinRequest = source.ViaJoinRequest == true
-            }, Channel(source.Chat, null));
+                UpdateId = updateId, Time = Time(Long(source, "date") ?? 0), Json = source.Clone(), Chat = Chat(Prop(source, "chat")),
+                Actor = User(Prop(source, "from")), OldMember = Member(Prop(source, "old_chat_member")),
+                NewMember = Member(Prop(source, "new_chat_member")),
+                InviteLink = Has(source, "invite_link", out var link) ? InviteLink(link) : null,
+                ViaJoinRequest = Bool(source, "via_join_request")
+            }, Channel(Prop(source, "chat"), null));
         }
 
         if (update.AdditionalData is not { } extra) yield break;
         foreach (var (kind, value) in extra)
         {
             var raw = value.Clone();
+            var now = DateTimeOffset.UtcNow;
             object payload = kind switch
             {
-                TelegramEventKinds.InlineQuery when typed.InlineQuery is { } query => new TelegramInlineQuery
+                TelegramEventKinds.InlineQuery => new TelegramInlineQuery
                 {
-                    UpdateId = updateId, Time = DateTimeOffset.UtcNow, Json = raw, QueryId = query.Id, From = User(query.From),
-                    Query = query.Query, Offset = query.Offset,
-                    ChatType = query.ChatType is { } type && type != "sender" ? ChatType(type) : null,
-                    Location = query.Location is { } location ? Location(location) : null
+                    UpdateId = updateId, Time = now, Json = raw, QueryId = Str(raw, "id") ?? "", From = User(Prop(raw, "from")),
+                    Query = Str(raw, "query") ?? "", Offset = Str(raw, "offset") ?? "",
+                    ChatType = Str(raw, "chat_type") is { } type && type != "sender" ? ChatType(type) : null,
+                    Location = Has(raw, "location", out var location) ? Location(location) : null
                 },
-                TelegramEventKinds.ChosenInlineResult when typed.ChosenInlineResult is { } chosen => new TelegramChosenInlineResult
+                TelegramEventKinds.ChosenInlineResult => new TelegramChosenInlineResult
                 {
-                    UpdateId = updateId, Time = DateTimeOffset.UtcNow, Json = raw, ResultId = chosen.ResultId,
-                    From = User(chosen.From), Query = chosen.Query, InlineMessageId = chosen.InlineMessageId
+                    UpdateId = updateId, Time = now, Json = raw, ResultId = Str(raw, "result_id") ?? "", From = User(Prop(raw, "from")),
+                    Query = Str(raw, "query") ?? "", InlineMessageId = Str(raw, "inline_message_id")
                 },
-                TelegramEventKinds.Poll when typed.Poll is { } poll => new TelegramPollUpdated
-                    { UpdateId = updateId, Time = DateTimeOffset.UtcNow, Json = raw, Poll = Poll(poll) },
-                TelegramEventKinds.PollAnswer when typed.PollAnswer is { } answer => new TelegramPollAnswer
+                TelegramEventKinds.Poll => new TelegramPollUpdated { UpdateId = updateId, Time = now, Json = raw, Poll = Poll(raw) },
+                TelegramEventKinds.PollAnswer => new TelegramPollAnswer
                 {
-                    UpdateId = updateId, Time = DateTimeOffset.UtcNow, Json = raw, PollId = answer.PollId,
-                    User = answer.User is { } voter ? User(voter) : null,
-                    VoterChat = answer.VoterChat is { } chat ? Chat(chat) : null,
-                    OptionIds = answer.OptionIds.Select(id => (int)id).ToArray()
+                    UpdateId = updateId, Time = now, Json = raw, PollId = Str(raw, "poll_id") ?? "",
+                    User = Has(raw, "user", out var voter) ? User(voter) : null,
+                    VoterChat = Has(raw, "voter_chat", out var voterChat) ? Chat(voterChat) : null,
+                    OptionIds = Items(raw, "option_ids").Select(id => id.GetInt32()).ToArray()
                 },
-                TelegramEventKinds.PreCheckoutQuery when typed.PreCheckoutQuery is { } checkout => new TelegramPreCheckoutQuery
+                TelegramEventKinds.PreCheckoutQuery => new TelegramPreCheckoutQuery
                 {
-                    UpdateId = updateId, Time = DateTimeOffset.UtcNow, Json = raw, QueryId = checkout.Id,
-                    From = User(checkout.From), Currency = checkout.Currency, TotalAmount = checkout.TotalAmount,
-                    InvoicePayload = checkout.InvoicePayload, ShippingOptionId = checkout.ShippingOptionId
+                    UpdateId = updateId, Time = now, Json = raw, QueryId = Str(raw, "id") ?? "", From = User(Prop(raw, "from")),
+                    Currency = Str(raw, "currency") ?? "", TotalAmount = Long(raw, "total_amount") ?? 0,
+                    InvoicePayload = Str(raw, "invoice_payload") ?? "", ShippingOptionId = Str(raw, "shipping_option_id")
                 },
-                TelegramEventKinds.ShippingQuery when typed.ShippingQuery is { } shipping => new TelegramShippingQuery
+                TelegramEventKinds.ShippingQuery => new TelegramShippingQuery
                 {
-                    UpdateId = updateId, Time = DateTimeOffset.UtcNow, Json = raw, QueryId = shipping.Id,
-                    From = User(shipping.From), InvoicePayload = shipping.InvoicePayload,
-                    ShippingAddress = new TelegramShippingAddress(shipping.ShippingAddress.CountryCode,
-                        shipping.ShippingAddress.State, shipping.ShippingAddress.City, shipping.ShippingAddress.StreetLine1,
-                        shipping.ShippingAddress.StreetLine2, shipping.ShippingAddress.PostCode)
+                    UpdateId = updateId, Time = now, Json = raw, QueryId = Str(raw, "id") ?? "", From = User(Prop(raw, "from")),
+                    InvoicePayload = Str(raw, "invoice_payload") ?? "",
+                    ShippingAddress = Address(Prop(raw, "shipping_address"))
                 },
-                TelegramEventKinds.ChatBoost when typed.ChatBoost is { } boost => new TelegramChatBoost
+                TelegramEventKinds.ChatBoost => new TelegramChatBoost
                 {
-                    UpdateId = updateId, Time = Time(boost.Boost.AddDate), Json = raw, Chat = Chat(boost.Chat),
-                    BoostId = boost.Boost.BoostId, Source = BoostSource(boost.Boost.Source).Name,
-                    User = BoostSource(boost.Boost.Source).User, ExpirationDate = Time(boost.Boost.ExpirationDate)
+                    UpdateId = updateId, Time = Time(Long(Prop(raw, "boost"), "add_date") ?? 0), Json = raw, Chat = Chat(Prop(raw, "chat")),
+                    BoostId = Str(Prop(raw, "boost"), "boost_id") ?? "", Source = Str(Prop(Prop(raw, "boost"), "source"), "source") ?? "",
+                    User = BoostUser(Prop(Prop(raw, "boost"), "source")),
+                    ExpirationDate = Time(Long(Prop(raw, "boost"), "expiration_date") ?? 0)
                 },
-                TelegramEventKinds.ChatBoostRemoved when typed.RemovedChatBoost is { } removed => new TelegramChatBoost
+                TelegramEventKinds.ChatBoostRemoved => new TelegramChatBoost
                 {
-                    UpdateId = updateId, Time = Time(removed.RemoveDate), Json = raw, Chat = Chat(removed.Chat),
-                    BoostId = removed.BoostId, Source = BoostSource(removed.Source).Name,
-                    User = BoostSource(removed.Source).User, IsRemoved = true
+                    UpdateId = updateId, Time = Time(Long(raw, "remove_date") ?? 0), Json = raw, Chat = Chat(Prop(raw, "chat")),
+                    BoostId = Str(raw, "boost_id") ?? "", Source = Str(Prop(raw, "source"), "source") ?? "",
+                    User = BoostUser(Prop(raw, "source")), IsRemoved = true
                 },
                 _ => raw
             };
@@ -234,11 +231,9 @@ public sealed class TelegramEventService(TelegramMapper mapper, Func<TelegramInt
         }
     }
 
-    private static (string Name, TelegramUser? User) BoostSource(Api.ChatBoostSource source) => source switch
-    {
-        Api.ChatBoostSourcePremium premium => ("premium", User(premium.User)),
-        Api.ChatBoostSourceGiftCode gift => ("gift_code", User(gift.User)),
-        Api.ChatBoostSourceGiveaway giveaway => ("giveaway", giveaway.User is { } user ? User(user) : null),
-        _ => (source.Source, null)
-    };
+    private static TelegramUser? BoostUser(JsonElement source) => Has(source, "user", out var user) ? User(user) : null;
+
+    private static TelegramShippingAddress Address(JsonElement address) => new(Str(address, "country_code") ?? "",
+        Str(address, "state") ?? "", Str(address, "city") ?? "", Str(address, "street_line1") ?? "",
+        Str(address, "street_line2") ?? "", Str(address, "post_code") ?? "");
 }

@@ -4,7 +4,7 @@ using Sdk = ShiroBot.SDK.Models;
 
 namespace ShiroBot.TelegramAdapter.Services;
 
-public sealed class TelegramUserService(TelegramClient client, TelegramMapper? mapper = null) : IUserService, ITelegramModelService
+public sealed class TelegramUserService(TelegramClient client, TelegramMapper? mapper = null) : IUserService
 {
     public async Task<Sdk.User> GetSelfAsync(CancellationToken cancellationToken = default)
     {
@@ -24,24 +24,4 @@ public sealed class TelegramUserService(TelegramClient client, TelegramMapper? m
         throw new NotSupportedException("Telegram 机器人没有好友申请接口。");
     public Task RejectFriendRequestAsync(string token, string? reason = null, CancellationToken cancellationToken = default) =>
         throw new NotSupportedException("Telegram 机器人没有好友申请接口。");
-    public async Task<ShiroBot.Model.Telegram.TelegramUser> GetTelegramUserAsync(string? userId = null, CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        if (userId is null)
-        {
-            var self = await client.CallAsync<TgUser>("getMe", cancellationToken: cancellationToken);
-            mapper?.Remember(self);
-            return TelegramMapper.ToPlatformUser(self);
-        }
-        if (mapper is not null && mapper.Users.TryGet(userId, out var known)) return TelegramMapper.ToPlatformUser(known);
-        throw new NotSupportedException("Bot API 不提供任意用户查询；请使用指定会话的成员查询。");
-    }
-    public async Task<ShiroBot.Model.Telegram.TelegramUser> GetTelegramMemberAsync(string channelId, string userId, CancellationToken cancellationToken = default)
-    {
-        var (chatId, _) = TelegramMapper.ParseChannelId(channelId);
-        var member = await client.CallAsync<TgChatMember>("getChatMember", new { chat_id = chatId,
-            user_id = TelegramMapper.ParseId(userId, "userId") }, cancellationToken);
-        mapper?.Remember(member.User);
-        return TelegramMapper.ToPlatformUser(member.User);
-    }
 }

@@ -21,10 +21,6 @@ jobs:
           dotnet-version: |
             11.0.x
             latest
-      - name: Check generated Bot API is current
-        run: |
-          python3 scripts/codegen/generate_bot_api.py
-          git diff --exit-code -- ShiroBot.Telegram.Model/BotApi src/BotApi
       - name: Restore
         run: dotnet restore ShiroBot.TelegramAdapter.csproj
       - name: Build

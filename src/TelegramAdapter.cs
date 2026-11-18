@@ -1,4 +1,3 @@
-using ShiroBot.TelegramAdapter.BotApi;
 using ShiroBot.TelegramAdapter.Services;
 using ShiroBot.SDK.Adapter;
 using ShiroBot.SDK.Config;
@@ -19,7 +18,6 @@ public sealed class TelegramAdapter : IBotAdapter, IConfigurableAdapter, IConfig
     private TelegramClient? _client;
     private TelegramInteractionService? _interactions;
     private TelegramReactionService? _reactions;
-    private TelegramBotApi? _botApi;
     private TelegramModelApi? _model;
     private CancellationTokenSource? _pollingTokenSource;
     private Task? _pollingTask;
@@ -54,7 +52,7 @@ public sealed class TelegramAdapter : IBotAdapter, IConfigurableAdapter, IConfig
         return Task.CompletedTask;
     }
 
-    public TService? GetExtension<TService>() where TService : class => this as TService ?? _client as TService ?? _message as TService ?? _user as TService ?? _interactions as TService ?? _reactions as TService ?? _model as TService ?? _botApi as TService;
+    public TService? GetExtension<TService>() where TService : class => this as TService ?? _client as TService ?? _message as TService ?? _user as TService ?? _interactions as TService ?? _reactions as TService ?? _model as TService;
 
     public async Task StartAsync()
     {
@@ -68,8 +66,7 @@ public sealed class TelegramAdapter : IBotAdapter, IConfigurableAdapter, IConfig
         {
             _client = new TelegramClient(config.BotToken, config.ApiBaseUrl, proxy: config.Proxy);
             _interactions = new TelegramInteractionService(_client, config.AutoAnswerCallbacks);
-            _botApi = new TelegramBotApi(_client);
-            _model = new TelegramModelApi(_botApi, _client, _mapper, _interactions);
+            _model = new TelegramModelApi(_client, _mapper, _interactions);
             _reactions = new TelegramReactionService(_client);
             _message = new TelegramMessageService(_client, _mapper, _interactions);
             _channel = new TelegramChannelService(_client, _mapper);
@@ -106,10 +103,8 @@ public sealed class TelegramAdapter : IBotAdapter, IConfigurableAdapter, IConfig
         finally
         {
             if (_client is not null) _events.Detach(_client);
-            _botApi?.Detach();
             _model?.Detach();
             _model = null;
-            _botApi = null;
             _pollingTokenSource?.Dispose();
             _client?.Dispose();
             _pollingTokenSource = null;

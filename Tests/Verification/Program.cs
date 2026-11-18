@@ -100,7 +100,6 @@ await adapter.StopAsync();
 try { TelegramMapper.ParseChannelId("-100:invalid"); throw new Exception("Invalid topic accepted."); }
 catch (ArgumentException) { }
 await Coverage.RunAsync();
-await BotApiCoverage.RunAsync();
 await ModelCoverage.RunAsync();
 await ClientCoverage.RunAsync();
 Console.WriteLine("Verified SDK HTTP dispatch, topic/reply/media payloads, capabilities, cancellation, custom API URLs, polling events, identity isolation and configuration.");

@@ -6,7 +6,6 @@ using System.Text.Json.Nodes;
 using ShiroBot.Model.Telegram;
 using ShiroBot.SDK.Models;
 using ShiroBot.TelegramAdapter;
-using ShiroBot.TelegramAdapter.BotApi;
 using ShiroBot.TelegramAdapter.Services;
 
 /// <summary>宿主共享 ShiroBot.Model.Telegram 契约的实现。</summary>
@@ -35,7 +34,7 @@ internal static class ModelCoverage
         using var client = new TelegramClient("test-token", handler: http);
         var mapper = new TelegramMapper();
         var interactions = new TelegramInteractionService(client, autoAnswer: false);
-        var model = new TelegramModelApi(new TelegramBotApi(client), client, mapper, interactions);
+        var model = new TelegramModelApi(client, mapper, interactions);
         var group = new Channel("-100:42", ChannelType.Thread);
 
         // 原生内容：投票、键盘、引用。
@@ -131,7 +130,7 @@ internal static class ModelCoverage
             Check(http.Method == "sendPhoto" && http.Multipart!.Contains("attach://cover") && http.Multipart.Contains("name=cover; filename=cover.jpg")
                   && raw.GetProperty("message_id").GetInt64() == 10, "Raw multipart call is wrong.");
         }
-        Check(model.BotApiVersion == ShiroBot.Telegram.Model.BotApi.BotApiInfo.Version, "Raw API version missing.");
+        Check(model.BotApiVersion == "10.4", "Raw API version missing.");
 
         // 事件与入站内容。
         var events = new TelegramEventService(mapper, () => interactions);

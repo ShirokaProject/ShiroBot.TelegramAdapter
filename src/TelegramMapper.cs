@@ -79,17 +79,17 @@ public sealed class TelegramMapper
 
     // ─── 入站消息 ───
 
-    /// <param name="typed">同一消息的完整 Bot API 对象；提供时 Raw 为共享 Model 的 TelegramMessage，并映射 Telegram 原生内容段。</param>
-    public MessageEvent ToMessageEvent(TgMessage message, ShiroBot.Telegram.Model.BotApi.Message? typed = null, JsonElement? json = null)
+    /// <param name="json">同一消息的原始 Bot API JSON；提供时映射位置、投票等 Telegram 原生内容段。</param>
+    public MessageEvent ToMessageEvent(TgMessage message, JsonElement? json = null)
     {
         Chats.Set(message.Chat.Id.ToString(), message.Chat);
         if (message.From is { } from) Remember(from);
         var segments = ResolveMentions(ToSegments(message));
-        if (typed is not null) segments = [.. segments, .. TelegramModelConverter.NativeSegments(typed)];
+        if (json is { } source) segments = [.. segments, .. TelegramModelConverter.NativeSegments(source)];
         return new MessageEvent
         {
             Platform = PlatformId, SelfId = SelfId,
-            Raw = typed is null ? message : TelegramModelConverter.Message(typed, json ?? JsonSerializer.SerializeToElement(message)),
+            Raw = TelegramModelConverter.Message(json ?? JsonSerializer.SerializeToElement(message)),
             MessageId = message.MessageId.ToString(), Channel = ToChannel(message.Chat, message.MessageThreadId),
             Sender = message.SenderChat is { } senderChat
                 ? new Sdk.User(senderChat.Id.ToString()) { Name = senderChat.Title ?? senderChat.Username }
