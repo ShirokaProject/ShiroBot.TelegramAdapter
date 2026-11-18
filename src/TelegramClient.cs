@@ -83,6 +83,9 @@ public sealed class TelegramClient : IDisposable
     public async Task<T> CallAsync<T>(string method, object? payload = null, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        // WhenWritingNull 不作用于字典条目；Telegram 会拒绝 "parse_mode": null 等显式 null 参数。
+        if (payload is IEnumerable<KeyValuePair<string, object?>> entries)
+            payload = entries.Where(entry => entry.Value is not null).ToDictionary(entry => entry.Key, entry => entry.Value);
         using var response = payload is null
             ? await _http.GetAsync(method, cancellationToken)
             : await _http.PostAsJsonAsync(method, payload, JsonOptions, cancellationToken);

@@ -28,6 +28,20 @@ internal static class ClientCoverage
             Check(handler.Last?.AbsoluteUri == $"http://127.0.0.1:8081/custom/bot{token}/getMe", "Custom API root or token trimming lost.");
         }
 
+        // 纯文本发送不能带显式 null 参数（Telegram 拒绝 "parse_mode": null）。
+        using (var client = new TelegramClient(token, handler: handler))
+        {
+            var messages = new ShiroBot.TelegramAdapter.Services.TelegramMessageService(client);
+            await messages.SendMessageAsync(new ShiroBot.SDK.Models.Channel("-1004332876562", ShiroBot.SDK.Models.ChannelType.Group),
+                [new ShiroBot.SDK.Models.TextSegment("status")]);
+            using var body = System.Text.Json.JsonDocument.Parse(handler.Body!);
+            var nulls = body.RootElement.EnumerateObject().Where(p => p.Value.ValueKind == System.Text.Json.JsonValueKind.Null)
+                .Select(p => p.Name).ToArray();
+            Check(handler.Last!.AbsolutePath.EndsWith("/sendMessage") && nulls.Length == 0
+                  && body.RootElement.GetProperty("text").GetString() == "status",
+                "sendMessage sent explicit nulls: " + string.Join(", ", nulls));
+        }
+
         var proxy = TelegramClient.CreateProxy("socks5://user:p%40ss@127.0.0.1:7891")!;
         var credentials = (NetworkCredential)proxy.Credentials!;
         Check(proxy.Address!.AbsoluteUri == "socks5://127.0.0.1:7891/" && credentials.UserName == "user" && credentials.Password == "p@ss",
@@ -47,14 +61,19 @@ internal static class ClientCoverage
     private sealed class UriRecorder : HttpMessageHandler
     {
         public Uri? Last { get; private set; }
+        public string? Body { get; private set; }
 
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
         {
             Last = request.RequestUri;
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            Body = request.Content is null ? null : await request.Content.ReadAsStringAsync(token);
+            var result = request.RequestUri!.AbsolutePath.EndsWith("/sendMessage")
+                ? """{"message_id":1,"date":1,"chat":{"id":-1004332876562,"type":"supergroup"}}"""
+                : """{"id":1,"is_bot":true,"first_name":"Bot"}""";
+            return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent("""{"ok":true,"result":{"id":1,"is_bot":true,"first_name":"Bot"}}""", Encoding.UTF8, "application/json")
-            });
+                Content = new StringContent("{\"ok\":true,\"result\":" + result + "}", Encoding.UTF8, "application/json")
+            };
         }
     }
 }

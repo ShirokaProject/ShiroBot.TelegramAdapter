@@ -215,8 +215,8 @@ internal static class TelegramModelConverter
             });
         var text = message.Text ?? message.Caption;
         var entities = message.Entities ?? message.CaptionEntities;
-        // 只有提及时文本段已经足够表达；其他格式实体另行保留。
-        if (text is not null && entities?.Any(entity => entity.Type is not ("mention" or "text_mention")) == true)
+        // 只保留真正的格式；话题标签、命令、链接等由 Telegram 自动识别，纯文本已足够表达。
+        if (text is not null && entities?.Any(entity => FormattingEntities.Contains(entity.Type)) == true)
             yield return new RawSegment(platform, TelegramSegmentKinds.FormattedText, new TelegramFormattedText(text,
                 entities.Select(entity => new TelegramTextEntity(entity.Type, (int)entity.Offset, (int)entity.Length)
                 {
@@ -224,6 +224,13 @@ internal static class TelegramModelConverter
                     CustomEmojiId = entity.CustomEmojiId
                 }).ToArray()));
     }
+
+    /// <summary>发送者设置的格式实体；不含 Telegram 自动识别的 mention、hashtag、bot_command、url 等。</summary>
+    private static readonly IReadOnlySet<string> FormattingEntities = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "bold", "italic", "underline", "strikethrough", "spoiler", "code", "pre", "text_link", "text_mention",
+        "custom_emoji", "blockquote", "expandable_blockquote", "date_time"
+    };
 
     /// <summary>已转换为类型化段或 <see cref="TelegramMessage"/> 资料的字段，不再作为原始段上报。</summary>
     public static readonly IReadOnlySet<string> ModeledMessageFields = new HashSet<string>(StringComparer.Ordinal)

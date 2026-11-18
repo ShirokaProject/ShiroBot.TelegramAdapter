@@ -162,6 +162,9 @@ internal static class ModelCoverage
         Check(formatted.Payload is TelegramFormattedText { Text: "bold @x", Entities: [{ Type: "bold" }, { Type: "mention" }] },
             "Formatted text not kept.");
 
+        await Emit("""{"update_id":21,"message":{"message_id":7,"date":1,"chat":{"id":1,"type":"private"},"from":{"id":7,"is_bot":false,"first_name":"A"},"text":"#shiro /start https://a.b","entities":[{"type":"hashtag","offset":0,"length":6},{"type":"bot_command","offset":7,"length":6},{"type":"url","offset":14,"length":9}]}}""");
+        Check(!((MessageEvent)received.Last()).Segments.OfType<RawSegment>().Any(), "Auto-detected entities must not create a formatted text segment.");
+
         await Emit("""{"update_id":3,"edited_message":{"message_id":6,"date":1,"edit_date":50,"chat":{"id":1,"type":"private"},"text":"new"}}""");
         Check(received.Last() is PlatformEvent { Kind: TelegramEventKinds.MessageEdited, Raw: TelegramMessageEdited
               { MessageId: "6", IsChannelPost: false, Segments: [TextSegment { Text: "new" }], UpdateId: 3 } edited }
